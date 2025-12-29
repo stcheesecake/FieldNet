@@ -1,0 +1,199 @@
+﻿game_id,season_id,competition_id,game_day,game_date,home_team_id,away_team_id,home_score,away_score,venue,competition_name,country_name,season_name,home_team_name,home_team_name_ko,away_team_name,away_team_name_ko
+126283,3669,587,1,2024-03-01 05:00:00,2354,4639,1,0,문수월드컵경기장,K League 1,KR,2024,Ulsan HD FC,울산 HD FC,Pohang Steelers,포항 스틸러스
+126284,3669,587,1,2024-03-01 07:30:00,4640,4657,1,1,전주월드컵경기장,K League 1,KR,2024,Jeonbuk Hyundai Motors,전북 현대 모터스,Daejeon Hana Citizen,대전 하나 시티즌
+126285,3669,587,1,2024-03-02 05:00:00,4648,316,2,0,광주전용구장,K League 1,KR,2024,Gwangju FC,광주FC,FC Seoul,FC서울
+126286,3669,587,1,2024-03-02 07:30:00,4646,4220,0,1,인천축구전용경기장,K League 1,KR,2024,Incheon United,인천 유나이티드,Suwon FC,수원FC
+126287,3669,587,1,2024-03-02 07:30:00,4643,4641,1,1,송암스포츠타운 주경기장,K League 1,KR,2024,Gangwon FC,강원FC,Jeju United,제주SK FC
+126288,3669,587,1,2024-03-03 05:00:00,4644,2353,0,1,DGB대구은행파크,K League 1,KR,2024,Daegu FC,대구FC,Gimcheon Sangmu,김천 상무 프로축구단
+126289,3669,587,2,2024-03-09 05:00:00,4220,4640,1,1,수원종합운동장,K League 1,KR,2024,Suwon FC,수원FC,Jeonbuk Hyundai Motors,전북 현대 모터스
+126290,3669,587,2,2024-03-09 07:30:00,4639,4644,3,1,포항스틸야드,K League 1,KR,2024,Pohang Steelers,포항 스틸러스,Daegu FC,대구FC
+126291,3669,587,2,2024-03-09 07:30:00,2353,2354,2,3,김천종합운동장,K League 1,KR,2024,Gimcheon Sangmu,김천 상무 프로축구단,Ulsan HD FC,울산 HD FC
+126292,3669,587,2,2024-03-10 05:00:00,4641,4657,3,1,제주월드컵경기장,K League 1,KR,2024,Jeju United,제주SK FC,Daejeon Hana Citizen,대전 하나 시티즌
+126294,3669,587,2,2024-03-10 07:00:00,316,4646,0,0,서울월드컵경기장,K League 1,KR,2024,FC Seoul,FC서울,Incheon United,인천 유나이티드
+126293,3669,587,2,2024-03-10 07:30:00,4648,4643,4,2,광주전용구장,K League 1,KR,2024,Gwangju FC,광주FC,Gangwon FC,강원FC
+126295,3669,587,3,2024-03-16 05:00:00,4657,4643,1,1,대전월드컵경기장,K League 1,KR,2024,Daejeon Hana Citizen,대전 하나 시티즌,Gangwon FC,강원FC
+126296,3669,587,3,2024-03-16 07:30:00,4644,4220,1,1,DGB대구은행파크,K League 1,KR,2024,Daegu FC,대구FC,Suwon FC,수원FC
+126297,3669,587,3,2024-03-16 07:30:00,316,4641,2,0,서울월드컵경기장,K League 1,KR,2024,FC Seoul,FC서울,Jeju United,제주SK FC
+126299,3669,587,3,2024-03-17 05:00:00,2353,4640,1,0,김천종합운동장,K League 1,KR,2024,Gimcheon Sangmu,김천 상무 프로축구단,Jeonbuk Hyundai Motors,전북 현대 모터스
+126298,3669,587,3,2024-03-17 05:00:00,4639,4648,1,0,포항스틸야드,K League 1,KR,2024,Pohang Steelers,포항 스틸러스,Gwangju FC,광주FC
+126300,3669,587,3,2024-03-17 07:30:00,2354,4646,3,3,문수월드컵경기장,K League 1,KR,2024,Ulsan HD FC,울산 HD FC,Incheon United,인천 유나이티드
+126302,3669,587,4,2024-03-30 05:00:00,4646,4657,2,0,인천축구전용경기장,K League 1,KR,2024,Incheon United,인천 유나이티드,Daejeon Hana Citizen,대전 하나 시티즌
+126301,3669,587,4,2024-03-30 05:00:00,4640,2354,2,2,전주월드컵경기장,K League 1,KR,2024,Jeonbuk Hyundai Motors,전북 현대 모터스,Ulsan HD FC,울산 HD FC
+126303,3669,587,4,2024-03-30 07:30:00,4641,4639,0,2,제주월드컵경기장,K League 1,KR,2024,Jeju United,제주SK FC,Pohang Steelers,포항 스틸러스
+126304,3669,587,4,2024-03-30 07:30:00,4220,2353,1,4,수원종합운동장,K League 1,KR,2024,Suwon FC,수원FC,Gimcheon Sangmu,김천 상무 프로축구단
+126305,3669,587,4,2024-03-31 05:00:00,4643,316,1,1,송암스포츠타운 주경기장,K League 1,KR,2024,Gangwon FC,강원FC,FC Seoul,FC서울
+126306,3669,587,4,2024-03-31 07:30:00,4648,4644,1,2,광주전용구장,K League 1,KR,2024,Gwangju FC,광주FC,Daegu FC,대구FC
+126308,3669,587,5,2024-04-02 10:30:00,4657,2354,2,0,대전월드컵경기장,K League 1,KR,2024,Daejeon Hana Citizen,대전 하나 시티즌,Ulsan HD FC,울산 HD FC
+126307,3669,587,5,2024-04-02 10:30:00,4639,4220,1,1,포항스틸야드,K League 1,KR,2024,Pohang Steelers,포항 스틸러스,Suwon FC,수원FC
+126312,3669,587,5,2024-04-03 10:30:00,4643,4644,3,0,송암스포츠타운 주경기장,K League 1,KR,2024,Gangwon FC,강원FC,Daegu FC,대구FC
+126309,3669,587,5,2024-04-03 10:30:00,4648,4646,2,3,광주전용구장,K League 1,KR,2024,Gwangju FC,광주FC,Incheon United,인천 유나이티드
+126311,3669,587,5,2024-04-03 10:30:00,4641,4640,2,0,제주월드컵경기장,K League 1,KR,2024,Jeju United,제주SK FC,Jeonbuk Hyundai Motors,전북 현대 모터스
+126310,3669,587,5,2024-04-03 10:30:00,316,2353,5,1,서울월드컵경기장,K League 1,KR,2024,FC Seoul,FC서울,Gimcheon Sangmu,김천 상무 프로축구단
+126313,3669,587,6,2024-04-06 05:00:00,2354,4220,3,0,문수월드컵경기장,K League 1,KR,2024,Ulsan HD FC,울산 HD FC,Suwon FC,수원FC
+126314,3669,587,6,2024-04-06 07:30:00,4646,4641,0,1,인천축구전용경기장,K League 1,KR,2024,Incheon United,인천 유나이티드,Jeju United,제주SK FC
+126315,3669,587,6,2024-04-06 07:30:00,2353,4648,2,1,김천종합운동장,K League 1,KR,2024,Gimcheon Sangmu,김천 상무 프로축구단,Gwangju FC,광주FC
+126317,3669,587,6,2024-04-07 05:00:00,4644,316,0,0,DGB대구은행파크,K League 1,KR,2024,Daegu FC,대구FC,FC Seoul,FC서울
+126316,3669,587,6,2024-04-07 05:00:00,4640,4643,2,3,전주월드컵경기장,K League 1,KR,2024,Jeonbuk Hyundai Motors,전북 현대 모터스,Gangwon FC,강원FC
+126318,3669,587,6,2024-04-07 07:30:00,4657,4639,1,2,대전월드컵경기장,K League 1,KR,2024,Daejeon Hana Citizen,대전 하나 시티즌,Pohang Steelers,포항 스틸러스
+126320,3669,587,7,2024-04-13 05:00:00,316,4639,2,4,서울월드컵경기장,K League 1,KR,2024,FC Seoul,FC서울,Pohang Steelers,포항 스틸러스
+126319,3669,587,7,2024-04-13 05:00:00,4640,4648,2,1,전주월드컵경기장,K League 1,KR,2024,Jeonbuk Hyundai Motors,전북 현대 모터스,Gwangju FC,광주FC
+126321,3669,587,7,2024-04-13 07:30:00,2354,4643,4,0,문수월드컵경기장,K League 1,KR,2024,Ulsan HD FC,울산 HD FC,Gangwon FC,강원FC
+126322,3669,587,7,2024-04-13 07:30:00,4641,2353,0,2,제주월드컵경기장,K League 1,KR,2024,Jeju United,제주SK FC,Gimcheon Sangmu,김천 상무 프로축구단
+126323,3669,587,7,2024-04-14 05:00:00,4220,4657,1,0,수원종합운동장,K League 1,KR,2024,Suwon FC,수원FC,Daejeon Hana Citizen,대전 하나 시티즌
+126324,3669,587,7,2024-04-14 07:30:00,4646,4644,1,1,인천축구전용경기장,K League 1,KR,2024,Incheon United,인천 유나이티드,Daegu FC,대구FC
+126326,3669,587,8,2024-04-20 05:00:00,4220,4641,2,1,수원종합운동장,K League 1,KR,2024,Suwon FC,수원FC,Jeju United,제주SK FC
+126327,3669,587,8,2024-04-20 07:30:00,4639,2353,0,0,포항스틸야드,K League 1,KR,2024,Pohang Steelers,포항 스틸러스,Gimcheon Sangmu,김천 상무 프로축구단
+126328,3669,587,8,2024-04-20 07:30:00,316,4640,2,3,서울월드컵경기장,K League 1,KR,2024,FC Seoul,FC서울,Jeonbuk Hyundai Motors,전북 현대 모터스
+126329,3669,587,8,2024-04-21 05:00:00,4643,4646,4,1,송암스포츠타운 주경기장,K League 1,KR,2024,Gangwon FC,강원FC,Incheon United,인천 유나이티드
+126330,3669,587,8,2024-04-21 07:30:00,4644,4657,0,0,DGB대구은행파크,K League 1,KR,2024,Daegu FC,대구FC,Daejeon Hana Citizen,대전 하나 시티즌
+126331,3669,587,9,2024-04-27 05:00:00,4657,316,3,1,대전월드컵경기장,K League 1,KR,2024,Daejeon Hana Citizen,대전 하나 시티즌,FC Seoul,FC서울
+126333,3669,587,9,2024-04-27 07:30:00,2353,4643,1,0,김천종합운동장,K League 1,KR,2024,Gimcheon Sangmu,김천 상무 프로축구단,Gangwon FC,강원FC
+126332,3669,587,9,2024-04-27 07:30:00,4648,4220,1,2,광주전용구장,K League 1,KR,2024,Gwangju FC,광주FC,Suwon FC,수원FC
+126334,3669,587,9,2024-04-28 05:00:00,4639,4646,0,0,포항스틸야드,K League 1,KR,2024,Pohang Steelers,포항 스틸러스,Incheon United,인천 유나이티드
+126335,3669,587,9,2024-04-28 05:00:00,4640,4644,2,2,전주월드컵경기장,K League 1,KR,2024,Jeonbuk Hyundai Motors,전북 현대 모터스,Daegu FC,대구FC
+126336,3669,587,9,2024-04-28 07:30:00,2354,4641,3,1,문수월드컵경기장,K League 1,KR,2024,Ulsan HD FC,울산 HD FC,Jeju United,제주SK FC
+126337,3669,587,10,2024-04-30 10:30:00,4657,2353,0,0,대전월드컵경기장,K League 1,KR,2024,Daejeon Hana Citizen,대전 하나 시티즌,Gimcheon Sangmu,김천 상무 프로축구단
+126338,3669,587,10,2024-04-30 10:30:00,4220,316,0,2,수원종합운동장,K League 1,KR,2024,Suwon FC,수원FC,FC Seoul,FC서울
+126342,3669,587,10,2024-05-01 10:00:00,4643,4639,2,4,송암스포츠타운 주경기장,K League 1,KR,2024,Gangwon FC,강원FC,Pohang Steelers,포항 스틸러스
+126341,3669,587,10,2024-05-01 10:00:00,4641,4648,1,3,제주월드컵경기장,K League 1,KR,2024,Jeju United,제주SK FC,Gwangju FC,광주FC
+126340,3669,587,10,2024-05-01 10:00:00,4646,4640,3,0,인천축구전용경기장,K League 1,KR,2024,Incheon United,인천 유나이티드,Jeonbuk Hyundai Motors,전북 현대 모터스
+126339,3669,587,10,2024-05-01 10:00:00,4644,2354,1,2,DGB대구은행파크,K League 1,KR,2024,Daegu FC,대구FC,Ulsan HD FC,울산 HD FC
+126343,3669,587,11,2024-05-04 05:30:00,316,2354,0,1,서울월드컵경기장,K League 1,KR,2024,FC Seoul,FC서울,Ulsan HD FC,울산 HD FC
+126344,3669,587,11,2024-05-04 07:30:00,4639,4640,1,0,포항스틸야드,K League 1,KR,2024,Pohang Steelers,포항 스틸러스,Jeonbuk Hyundai Motors,전북 현대 모터스
+126345,3669,587,11,2024-05-05 05:00:00,4220,4643,1,2,수원종합운동장,K League 1,KR,2024,Suwon FC,수원FC,Gangwon FC,강원FC
+126346,3669,587,11,2024-05-05 07:30:00,2353,4646,2,2,김천종합운동장,K League 1,KR,2024,Gimcheon Sangmu,김천 상무 프로축구단,Incheon United,인천 유나이티드
+126347,3669,587,11,2024-05-06 05:00:00,4641,4644,1,0,제주월드컵경기장,K League 1,KR,2024,Jeju United,제주SK FC,Daegu FC,대구FC
+126348,3669,587,11,2024-05-06 07:30:00,4648,4657,2,1,광주전용구장,K League 1,KR,2024,Gwangju FC,광주FC,Daejeon Hana Citizen,대전 하나 시티즌
+126349,3669,587,12,2024-05-11 07:30:00,4646,316,1,2,인천축구전용경기장,K League 1,KR,2024,Incheon United,인천 유나이티드,FC Seoul,FC서울
+126350,3669,587,12,2024-05-11 10:00:00,4644,4648,3,2,DGB대구은행파크,K League 1,KR,2024,Daegu FC,대구FC,Gwangju FC,광주FC
+126351,3669,587,12,2024-05-11 10:00:00,4643,4657,3,3,송암스포츠타운 주경기장,K League 1,KR,2024,Gangwon FC,강원FC,Daejeon Hana Citizen,대전 하나 시티즌
+126352,3669,587,12,2024-05-12 05:00:00,4640,4220,2,3,전주월드컵경기장,K League 1,KR,2024,Jeonbuk Hyundai Motors,전북 현대 모터스,Suwon FC,수원FC
+126354,3669,587,12,2024-05-12 07:30:00,4639,4641,1,1,포항스틸야드,K League 1,KR,2024,Pohang Steelers,포항 스틸러스,Jeju United,제주SK FC
+126353,3669,587,12,2024-05-12 07:30:00,2354,2353,2,2,문수월드컵경기장,K League 1,KR,2024,Ulsan HD FC,울산 HD FC,Gimcheon Sangmu,김천 상무 프로축구단
+126325,3669,587,8,2024-05-15 07:30:00,4648,2354,2,1,광주전용구장,K League 1,KR,2024,Gwangju FC,광주FC,Ulsan HD FC,울산 HD FC
+126355,3669,587,13,2024-05-18 07:30:00,4657,4646,0,1,대전월드컵경기장,K League 1,KR,2024,Daejeon Hana Citizen,대전 하나 시티즌,Incheon United,인천 유나이티드
+126357,3669,587,13,2024-05-18 10:00:00,2353,4641,1,0,김천종합운동장,K League 1,KR,2024,Gimcheon Sangmu,김천 상무 프로축구단,Jeju United,제주SK FC
+126358,3669,587,13,2024-05-19 07:30:00,316,4644,1,2,서울월드컵경기장,K League 1,KR,2024,FC Seoul,FC서울,Daegu FC,대구FC
+126359,3669,587,13,2024-05-19 07:30:00,4643,2354,1,0,송암스포츠타운 주경기장,K League 1,KR,2024,Gangwon FC,강원FC,Ulsan HD FC,울산 HD FC
+126356,3669,587,13,2024-05-19 07:30:00,4648,4640,0,3,광주전용구장,K League 1,KR,2024,Gwangju FC,광주FC,Jeonbuk Hyundai Motors,전북 현대 모터스
+126360,3669,587,13,2024-05-19 10:00:00,4220,4639,1,0,수원종합운동장,K League 1,KR,2024,Suwon FC,수원FC,Pohang Steelers,포항 스틸러스
+126361,3669,587,14,2024-05-25 05:00:00,4640,2353,0,0,전주월드컵경기장,K League 1,KR,2024,Jeonbuk Hyundai Motors,전북 현대 모터스,Gimcheon Sangmu,김천 상무 프로축구단
+126362,3669,587,14,2024-05-25 07:30:00,2354,4657,4,1,문수월드컵경기장,K League 1,KR,2024,Ulsan HD FC,울산 HD FC,Daejeon Hana Citizen,대전 하나 시티즌
+126364,3669,587,14,2024-05-25 10:00:00,4646,4648,1,1,인천축구전용경기장,K League 1,KR,2024,Incheon United,인천 유나이티드,Gwangju FC,광주FC
+126363,3669,587,14,2024-05-25 10:00:00,4639,316,2,2,포항스틸야드,K League 1,KR,2024,Pohang Steelers,포항 스틸러스,FC Seoul,FC서울
+126365,3669,587,14,2024-05-26 07:30:00,4644,4643,1,2,DGB대구은행파크,K League 1,KR,2024,Daegu FC,대구FC,Gangwon FC,강원FC
+126366,3669,587,14,2024-05-26 10:00:00,4641,4220,1,0,제주월드컵경기장,K League 1,KR,2024,Jeju United,제주SK FC,Suwon FC,수원FC
+126368,3669,587,15,2024-05-28 10:30:00,2353,316,0,0,김천종합운동장,K League 1,KR,2024,Gimcheon Sangmu,김천 상무 프로축구단,FC Seoul,FC서울
+126367,3669,587,15,2024-05-28 10:30:00,4648,4639,0,1,광주전용구장,K League 1,KR,2024,Gwangju FC,광주FC,Pohang Steelers,포항 스틸러스
+126369,3669,587,15,2024-05-29 10:30:00,4646,2354,1,1,인천축구전용경기장,K League 1,KR,2024,Incheon United,인천 유나이티드,Ulsan HD FC,울산 HD FC
+126372,3669,587,15,2024-05-29 10:30:00,4643,4640,2,1,송암스포츠타운 주경기장,K League 1,KR,2024,Gangwon FC,강원FC,Jeonbuk Hyundai Motors,전북 현대 모터스
+126370,3669,587,15,2024-05-29 10:30:00,4657,4641,0,1,대전월드컵경기장,K League 1,KR,2024,Daejeon Hana Citizen,대전 하나 시티즌,Jeju United,제주SK FC
+126371,3669,587,15,2024-05-29 10:30:00,4220,4644,2,0,수원종합운동장,K League 1,KR,2024,Suwon FC,수원FC,Daegu FC,대구FC
+126373,3669,587,16,2024-06-01 07:30:00,2354,4640,1,0,문수월드컵경기장,K League 1,KR,2024,Ulsan HD FC,울산 HD FC,Jeonbuk Hyundai Motors,전북 현대 모터스
+126375,3669,587,16,2024-06-01 10:00:00,2353,4639,3,1,김천종합운동장,K League 1,KR,2024,Gimcheon Sangmu,김천 상무 프로축구단,Pohang Steelers,포항 스틸러스
+126374,3669,587,16,2024-06-01 10:00:00,4220,4646,3,1,수원종합운동장,K League 1,KR,2024,Suwon FC,수원FC,Incheon United,인천 유나이티드
+126376,3669,587,16,2024-06-02 07:30:00,4657,4644,1,0,대전월드컵경기장,K League 1,KR,2024,Daejeon Hana Citizen,대전 하나 시티즌,Daegu FC,대구FC
+126377,3669,587,16,2024-06-02 07:30:00,4641,4643,1,2,제주월드컵경기장,K League 1,KR,2024,Jeju United,제주SK FC,Gangwon FC,강원FC
+126378,3669,587,16,2024-06-02 10:00:00,316,4648,1,2,서울월드컵경기장,K League 1,KR,2024,FC Seoul,FC서울,Gwangju FC,광주FC
+126379,3669,587,17,2024-06-15 09:00:00,4639,4657,1,1,포항스틸야드,K League 1,KR,2024,Pohang Steelers,포항 스틸러스,Daejeon Hana Citizen,대전 하나 시티즌
+126380,3669,587,17,2024-06-15 10:00:00,4648,2353,2,0,광주전용구장,K League 1,KR,2024,Gwangju FC,광주FC,Gimcheon Sangmu,김천 상무 프로축구단
+126381,3669,587,17,2024-06-15 11:00:00,4643,4220,3,1,송암스포츠타운 주경기장,K League 1,KR,2024,Gangwon FC,강원FC,Suwon FC,수원FC
+126383,3669,587,17,2024-06-16 09:00:00,4640,4646,2,2,전주월드컵경기장,K League 1,KR,2024,Jeonbuk Hyundai Motors,전북 현대 모터스,Incheon United,인천 유나이티드
+126382,3669,587,17,2024-06-16 09:00:00,2354,316,2,2,문수월드컵경기장,K League 1,KR,2024,Ulsan HD FC,울산 HD FC,FC Seoul,FC서울
+126384,3669,587,17,2024-06-16 10:00:00,4644,4641,1,0,DGB대구은행파크,K League 1,KR,2024,Daegu FC,대구FC,Jeju United,제주SK FC
+126385,3669,587,18,2024-06-22 09:00:00,4644,4640,3,0,DGB대구은행파크,K League 1,KR,2024,Daegu FC,대구FC,Jeonbuk Hyundai Motors,전북 현대 모터스
+126387,3669,587,18,2024-06-22 10:00:00,4643,2353,2,3,강릉종합운동장,K League 1,KR,2024,Gangwon FC,강원FC,Gimcheon Sangmu,김천 상무 프로축구단
+126386,3669,587,18,2024-06-22 10:00:00,4657,4648,2,1,대전월드컵경기장,K League 1,KR,2024,Daejeon Hana Citizen,대전 하나 시티즌,Gwangju FC,광주FC
+126388,3669,587,18,2024-06-22 11:00:00,316,4220,3,0,서울월드컵경기장,K League 1,KR,2024,FC Seoul,FC서울,Suwon FC,수원FC
+126390,3669,587,18,2024-06-23 09:00:00,4641,2354,2,3,제주월드컵경기장,K League 1,KR,2024,Jeju United,제주SK FC,Ulsan HD FC,울산 HD FC
+126389,3669,587,18,2024-06-23 09:00:00,4646,4639,1,3,인천축구전용경기장,K League 1,KR,2024,Incheon United,인천 유나이티드,Pohang Steelers,포항 스틸러스
+126392,3669,587,19,2024-06-25 10:30:00,2353,4657,2,0,김천종합운동장,K League 1,KR,2024,Gimcheon Sangmu,김천 상무 프로축구단,Daejeon Hana Citizen,대전 하나 시티즌
+126391,3669,587,19,2024-06-25 10:30:00,4220,4648,1,0,수원종합운동장,K League 1,KR,2024,Suwon FC,수원FC,Gwangju FC,광주FC
+126393,3669,587,19,2024-06-26 10:30:00,2354,4644,1,0,문수월드컵경기장,K League 1,KR,2024,Ulsan HD FC,울산 HD FC,Daegu FC,대구FC
+126396,3669,587,19,2024-06-26 10:30:00,4641,4646,1,0,제주월드컵경기장,K League 1,KR,2024,Jeju United,제주SK FC,Incheon United,인천 유나이티드
+126395,3669,587,19,2024-06-26 10:30:00,316,4643,2,0,서울월드컵경기장,K League 1,KR,2024,FC Seoul,FC서울,Gangwon FC,강원FC
+126394,3669,587,19,2024-06-26 10:30:00,4640,4639,1,1,전주월드컵경기장,K League 1,KR,2024,Jeonbuk Hyundai Motors,전북 현대 모터스,Pohang Steelers,포항 스틸러스
+126397,3669,587,20,2024-06-29 09:00:00,2353,4644,2,0,김천종합운동장,K League 1,KR,2024,Gimcheon Sangmu,김천 상무 프로축구단,Daegu FC,대구FC
+126398,3669,587,20,2024-06-29 10:00:00,4640,316,1,5,전주월드컵경기장,K League 1,KR,2024,Jeonbuk Hyundai Motors,전북 현대 모터스,FC Seoul,FC서울
+126399,3669,587,20,2024-06-29 11:00:00,4657,4220,0,2,대전월드컵경기장,K League 1,KR,2024,Daejeon Hana Citizen,대전 하나 시티즌,Suwon FC,수원FC
+126400,3669,587,20,2024-06-30 09:00:00,4639,2354,2,1,포항스틸야드,K League 1,KR,2024,Pohang Steelers,포항 스틸러스,Ulsan HD FC,울산 HD FC
+126402,3669,587,20,2024-06-30 10:00:00,4646,4643,0,1,인천축구전용경기장,K League 1,KR,2024,Incheon United,인천 유나이티드,Gangwon FC,강원FC
+126401,3669,587,20,2024-06-30 10:00:00,4648,4641,2,1,광주전용구장,K League 1,KR,2024,Gwangju FC,광주FC,Jeju United,제주SK FC
+126403,3669,587,21,2024-07-05 10:30:00,4646,2353,1,1,인천축구전용경기장,K League 1,KR,2024,Incheon United,인천 유나이티드,Gimcheon Sangmu,김천 상무 프로축구단
+126404,3669,587,21,2024-07-05 10:30:00,4220,2354,1,1,수원종합운동장,K League 1,KR,2024,Suwon FC,수원FC,Ulsan HD FC,울산 HD FC
+126405,3669,587,21,2024-07-06 10:00:00,4641,316,3,2,제주월드컵경기장,K League 1,KR,2024,Jeju United,제주SK FC,FC Seoul,FC서울
+126406,3669,587,21,2024-07-06 10:30:00,4644,4639,3,3,DGB대구은행파크,K League 1,KR,2024,Daegu FC,대구FC,Pohang Steelers,포항 스틸러스
+126408,3669,587,21,2024-07-07 10:00:00,4643,4648,2,0,강릉종합운동장,K League 1,KR,2024,Gangwon FC,강원FC,Gwangju FC,광주FC
+126407,3669,587,21,2024-07-07 10:00:00,4657,4640,2,2,대전월드컵경기장,K League 1,KR,2024,Daejeon Hana Citizen,대전 하나 시티즌,Jeonbuk Hyundai Motors,전북 현대 모터스
+126410,3669,587,22,2024-07-09 10:30:00,2353,4220,2,3,김천종합운동장,K League 1,KR,2024,Gimcheon Sangmu,김천 상무 프로축구단,Suwon FC,수원FC
+126409,3669,587,22,2024-07-09 10:30:00,4644,4646,0,0,DGB대구은행파크,K League 1,KR,2024,Daegu FC,대구FC,Incheon United,인천 유나이티드
+126412,3669,587,22,2024-07-10 10:30:00,4639,4643,2,0,포항스틸야드,K League 1,KR,2024,Pohang Steelers,포항 스틸러스,Gangwon FC,강원FC
+126414,3669,587,22,2024-07-10 10:30:00,316,4657,2,1,서울월드컵경기장,K League 1,KR,2024,FC Seoul,FC서울,Daejeon Hana Citizen,대전 하나 시티즌
+126413,3669,587,22,2024-07-10 10:30:00,4640,4641,2,1,전주월드컵경기장,K League 1,KR,2024,Jeonbuk Hyundai Motors,전북 현대 모터스,Jeju United,제주SK FC
+126411,3669,587,22,2024-07-10 10:30:00,2354,4648,0,1,문수월드컵경기장,K League 1,KR,2024,Ulsan HD FC,울산 HD FC,Gwangju FC,광주FC
+126415,3669,587,23,2024-07-13 10:00:00,2354,316,1,0,문수월드컵경기장,K League 1,KR,2024,Ulsan HD FC,울산 HD FC,FC Seoul,FC서울
+126416,3669,587,23,2024-07-13 10:30:00,4657,4643,1,1,대전월드컵경기장,K League 1,KR,2024,Daejeon Hana Citizen,대전 하나 시티즌,Gangwon FC,강원FC
+126417,3669,587,23,2024-07-13 10:30:00,4641,4639,2,1,제주월드컵경기장,K League 1,KR,2024,Jeju United,제주SK FC,Pohang Steelers,포항 스틸러스
+126419,3669,587,23,2024-07-14 10:00:00,4220,4644,2,2,수원종합운동장,K League 1,KR,2024,Suwon FC,수원FC,Daegu FC,대구FC
+126420,3669,587,23,2024-07-14 10:00:00,2353,4640,4,0,김천종합운동장,K League 1,KR,2024,Gimcheon Sangmu,김천 상무 프로축구단,Jeonbuk Hyundai Motors,전북 현대 모터스
+126418,3669,587,23,2024-07-14 10:00:00,4648,4646,0,2,광주전용구장,K League 1,KR,2024,Gwangju FC,광주FC,Incheon United,인천 유나이티드
+126421,3669,587,24,2024-07-20 10:00:00,4640,2354,2,0,전주월드컵경기장,K League 1,KR,2024,Jeonbuk Hyundai Motors,전북 현대 모터스,Ulsan HD FC,울산 HD FC
+126422,3669,587,24,2024-07-20 10:30:00,4643,4641,4,0,강릉종합운동장,K League 1,KR,2024,Gangwon FC,강원FC,Jeju United,제주SK FC
+126426,3669,587,24,2024-07-21 10:00:00,4657,4639,1,2,대전월드컵경기장,K League 1,KR,2024,Daejeon Hana Citizen,대전 하나 시티즌,Pohang Steelers,포항 스틸러스
+126424,3669,587,24,2024-07-21 10:00:00,4644,4648,0,1,DGB대구은행파크,K League 1,KR,2024,Daegu FC,대구FC,Gwangju FC,광주FC
+126423,3669,587,24,2024-07-21 10:00:00,4646,4220,1,4,인천축구전용경기장,K League 1,KR,2024,Incheon United,인천 유나이티드,Suwon FC,수원FC
+126425,3669,587,24,2024-07-21 10:00:00,316,2353,1,0,서울월드컵경기장,K League 1,KR,2024,FC Seoul,FC서울,Gimcheon Sangmu,김천 상무 프로축구단
+126428,3669,587,25,2024-07-26 10:30:00,4643,4640,4,2,강릉종합운동장,K League 1,KR,2024,Gangwon FC,강원FC,Jeonbuk Hyundai Motors,전북 현대 모터스
+126427,3669,587,25,2024-07-26 10:30:00,4641,2354,1,0,제주월드컵경기장,K League 1,KR,2024,Jeju United,제주SK FC,Ulsan HD FC,울산 HD FC
+126429,3669,587,25,2024-07-27 10:00:00,4648,4220,1,0,광주전용구장,K League 1,KR,2024,Gwangju FC,광주FC,Suwon FC,수원FC
+126431,3669,587,25,2024-07-27 10:30:00,4646,316,0,1,인천축구전용경기장,K League 1,KR,2024,Incheon United,인천 유나이티드,FC Seoul,FC서울
+126430,3669,587,25,2024-07-27 10:30:00,4644,4657,1,1,DGB대구은행파크,K League 1,KR,2024,Daegu FC,대구FC,Daejeon Hana Citizen,대전 하나 시티즌
+126432,3669,587,25,2024-07-28 10:00:00,4639,2353,1,2,포항스틸야드,K League 1,KR,2024,Pohang Steelers,포항 스틸러스,Gimcheon Sangmu,김천 상무 프로축구단
+126434,3669,587,26,2024-08-09 10:30:00,2353,4643,1,2,김천종합운동장,K League 1,KR,2024,Gimcheon Sangmu,김천 상무 프로축구단,Gangwon FC,강원FC
+126433,3669,587,26,2024-08-09 10:30:00,4640,4648,0,1,전주월드컵경기장,K League 1,KR,2024,Jeonbuk Hyundai Motors,전북 현대 모터스,Gwangju FC,광주FC
+126435,3669,587,26,2024-08-10 10:00:00,2354,4644,1,0,문수월드컵경기장,K League 1,KR,2024,Ulsan HD FC,울산 HD FC,Daegu FC,대구FC
+126436,3669,587,26,2024-08-10 10:30:00,4641,4646,0,1,제주월드컵경기장,K League 1,KR,2024,Jeju United,제주SK FC,Incheon United,인천 유나이티드
+126437,3669,587,26,2024-08-10 10:30:00,4220,4657,1,2,수원종합운동장,K League 1,KR,2024,Suwon FC,수원FC,Daejeon Hana Citizen,대전 하나 시티즌
+126438,3669,587,26,2024-08-11 10:00:00,4639,316,1,2,포항스틸야드,K League 1,KR,2024,Pohang Steelers,포항 스틸러스,FC Seoul,FC서울
+126439,3669,587,27,2024-08-16 10:30:00,4644,2353,3,0,DGB대구은행파크,K League 1,KR,2024,Daegu FC,대구FC,Gimcheon Sangmu,김천 상무 프로축구단
+126440,3669,587,27,2024-08-16 10:30:00,316,4641,1,0,서울월드컵경기장,K League 1,KR,2024,FC Seoul,FC서울,Jeju United,제주SK FC
+126441,3669,587,27,2024-08-17 10:00:00,4640,4639,2,1,전주월드컵경기장,K League 1,KR,2024,Jeonbuk Hyundai Motors,전북 현대 모터스,Pohang Steelers,포항 스틸러스
+126442,3669,587,27,2024-08-17 10:30:00,4657,4646,2,1,대전월드컵경기장,K League 1,KR,2024,Daejeon Hana Citizen,대전 하나 시티즌,Incheon United,인천 유나이티드
+126443,3669,587,27,2024-08-18 10:00:00,2354,4220,1,2,문수월드컵경기장,K League 1,KR,2024,Ulsan HD FC,울산 HD FC,Suwon FC,수원FC
+126444,3669,587,27,2024-08-18 10:00:00,4643,4648,3,2,강릉종합운동장,K League 1,KR,2024,Gangwon FC,강원FC,Gwangju FC,광주FC
+126445,3669,587,28,2024-08-24 10:00:00,4639,4644,1,2,포항스틸야드,K League 1,KR,2024,Pohang Steelers,포항 스틸러스,Daegu FC,대구FC
+126446,3669,587,28,2024-08-24 10:30:00,4646,4640,0,1,인천축구전용경기장,K League 1,KR,2024,Incheon United,인천 유나이티드,Jeonbuk Hyundai Motors,전북 현대 모터스
+126447,3669,587,28,2024-08-24 10:30:00,316,4643,2,0,서울월드컵경기장,K League 1,KR,2024,FC Seoul,FC서울,Gangwon FC,강원FC
+126450,3669,587,28,2024-08-25 10:00:00,2353,4657,2,2,김천종합운동장,K League 1,KR,2024,Gimcheon Sangmu,김천 상무 프로축구단,Daejeon Hana Citizen,대전 하나 시티즌
+126449,3669,587,28,2024-08-25 10:00:00,4220,4641,5,0,수원종합운동장,K League 1,KR,2024,Suwon FC,수원FC,Jeju United,제주SK FC
+126448,3669,587,28,2024-08-25 10:00:00,4648,2354,0,1,광주전용구장,K League 1,KR,2024,Gwangju FC,광주FC,Ulsan HD FC,울산 HD FC
+126451,3669,587,29,2024-08-31 10:00:00,2354,4639,5,4,문수월드컵경기장,K League 1,KR,2024,Ulsan HD FC,울산 HD FC,Pohang Steelers,포항 스틸러스
+126452,3669,587,29,2024-08-31 10:30:00,4644,4646,1,2,DGB대구은행파크,K League 1,KR,2024,Daegu FC,대구FC,Incheon United,인천 유나이티드
+126453,3669,587,29,2024-09-01 09:00:00,4641,2353,1,0,제주월드컵경기장,K League 1,KR,2024,Jeju United,제주SK FC,Gimcheon Sangmu,김천 상무 프로축구단
+126456,3669,587,29,2024-09-01 10:00:00,4643,4220,2,2,강릉종합운동장,K League 1,KR,2024,Gangwon FC,강원FC,Suwon FC,수원FC
+126454,3669,587,29,2024-09-01 10:00:00,4640,316,0,0,전주월드컵경기장,K League 1,KR,2024,Jeonbuk Hyundai Motors,전북 현대 모터스,FC Seoul,FC서울
+126455,3669,587,29,2024-09-01 10:00:00,4657,4648,2,0,대전월드컵경기장,K League 1,KR,2024,Daejeon Hana Citizen,대전 하나 시티즌,Gwangju FC,광주FC
+126458,3669,587,30,2024-09-13 10:30:00,4648,4639,2,1,광주전용구장,K League 1,KR,2024,Gwangju FC,광주FC,Pohang Steelers,포항 스틸러스
+126457,3669,587,30,2024-09-13 10:30:00,2354,4643,2,0,문수월드컵경기장,K League 1,KR,2024,Ulsan HD FC,울산 HD FC,Gangwon FC,강원FC
+126459,3669,587,30,2024-09-14 07:30:00,316,4657,2,3,서울월드컵경기장,K League 1,KR,2024,FC Seoul,FC서울,Daejeon Hana Citizen,대전 하나 시티즌
+126461,3669,587,30,2024-09-14 10:00:00,4220,4640,0,6,수원종합운동장,K League 1,KR,2024,Suwon FC,수원FC,Jeonbuk Hyundai Motors,전북 현대 모터스
+126460,3669,587,30,2024-09-14 10:00:00,4641,4644,0,4,제주월드컵경기장,K League 1,KR,2024,Jeju United,제주SK FC,Daegu FC,대구FC
+126462,3669,587,30,2024-09-15 07:30:00,2353,4646,2,0,김천종합운동장,K League 1,KR,2024,Gimcheon Sangmu,김천 상무 프로축구단,Incheon United,인천 유나이티드
+126463,3669,587,31,2024-09-21 07:30:00,4220,2353,2,4,수원종합운동장,K League 1,KR,2024,Suwon FC,수원FC,Gimcheon Sangmu,김천 상무 프로축구단
+126464,3669,587,31,2024-09-21 10:00:00,4644,316,1,1,DGB대구은행파크,K League 1,KR,2024,Daegu FC,대구FC,FC Seoul,FC서울
+126466,3669,587,31,2024-09-22 07:30:00,4648,4641,0,2,광주전용구장,K League 1,KR,2024,Gwangju FC,광주FC,Jeju United,제주SK FC
+126465,3669,587,31,2024-09-22 07:30:00,4639,4643,2,1,포항스틸야드,K League 1,KR,2024,Pohang Steelers,포항 스틸러스,Gangwon FC,강원FC
+126468,3669,587,31,2024-09-22 10:00:00,4657,4640,0,0,대전월드컵경기장,K League 1,KR,2024,Daejeon Hana Citizen,대전 하나 시티즌,Jeonbuk Hyundai Motors,전북 현대 모터스
+126467,3669,587,31,2024-09-22 10:00:00,4646,2354,0,0,인천축구전용경기장,K League 1,KR,2024,Incheon United,인천 유나이티드,Ulsan HD FC,울산 HD FC
+126470,3669,587,32,2024-09-27 10:30:00,4657,2354,0,1,대전월드컵경기장,K League 1,KR,2024,Daejeon Hana Citizen,대전 하나 시티즌,Ulsan HD FC,울산 HD FC
+126469,3669,587,32,2024-09-27 10:30:00,4639,4646,1,0,포항스틸야드,K League 1,KR,2024,Pohang Steelers,포항 스틸러스,Incheon United,인천 유나이티드
+126471,3669,587,32,2024-09-28 07:30:00,4643,4644,1,1,강릉종합운동장,K League 1,KR,2024,Gangwon FC,강원FC,Daegu FC,대구FC
+126472,3669,587,32,2024-09-28 10:00:00,4640,4641,2,1,전주월드컵경기장,K League 1,KR,2024,Jeonbuk Hyundai Motors,전북 현대 모터스,Jeju United,제주SK FC
+126473,3669,587,32,2024-09-28 10:00:00,2353,4648,2,0,김천종합운동장,K League 1,KR,2024,Gimcheon Sangmu,김천 상무 프로축구단,Gwangju FC,광주FC
+126474,3669,587,32,2024-09-29 07:30:00,316,4220,1,0,서울월드컵경기장,K League 1,KR,2024,FC Seoul,FC서울,Suwon FC,수원FC
+126475,3669,587,33,2024-10-06 06:00:00,2354,2353,2,1,문수월드컵경기장,K League 1,KR,2024,Ulsan HD FC,울산 HD FC,Gimcheon Sangmu,김천 상무 프로축구단
+126477,3669,587,33,2024-10-06 06:00:00,4644,4640,4,3,DGB대구은행파크,K League 1,KR,2024,Daegu FC,대구FC,Jeonbuk Hyundai Motors,전북 현대 모터스
+126476,3669,587,33,2024-10-06 06:00:00,4648,316,3,1,광주전용구장,K League 1,KR,2024,Gwangju FC,광주FC,FC Seoul,FC서울
+126478,3669,587,33,2024-10-06 06:00:00,4646,4643,1,3,인천축구전용경기장,K League 1,KR,2024,Incheon United,인천 유나이티드,Gangwon FC,강원FC
+126479,3669,587,33,2024-10-06 06:00:00,4641,4657,2,1,제주월드컵경기장,K League 1,KR,2024,Jeju United,제주SK FC,Daejeon Hana Citizen,대전 하나 시티즌
+126480,3669,587,33,2024-10-06 06:00:00,4639,4220,1,1,포항스틸야드,K League 1,KR,2024,Pohang Steelers,포항 스틸러스,Suwon FC,수원FC
