@@ -71,7 +71,7 @@ N_FUTURE_ACTIONS = 10
 N_FOLDS = 3
 SEED = 42
 
-N_ROUNDS = 100
+N_ROUNDS = 500
 
 # ---- [START, END, STEP] ranges ----
 # ✅ n_prev 커질수록 샘플(컬럼) 증가 → 제한
@@ -79,30 +79,30 @@ N_PREV_ACTIONS_R = [3, 10, 1]
 
 # ✅ CatBoost HPO (현실 범위)
 # iterations + od_wait가 시간 상한 핵심
-ITER_R         = [300, 1200, 150]     # iterations
-OD_WAIT_R      = [30, 100, 10]        # early stopping wait (od_wait)
+ITER_R         = [1000, 4000, 200]     # iterations
+OD_WAIT_R      = [50, 200, 25]        # early stopping wait (od_wait)
 
-DEPTH_R        = [4, 8, 1]            # depth
-LR_R           = [3, 10, 1]           # 0.03~0.10
+DEPTH_R        = [4, 10, 1]            # depth
+LR_R           = [1, 20, 1]           # 0.03~0.10
 LR_SCALE       = 0.01
 
-L2_R           = [10, 80, 10]         # 1.0~8.0
-L2_SCALE       = 0.1
+L2_R           = [1, 20, 1]         # 1.0~8.0
+L2_SCALE       = 0.01
 
-RANDOM_STRENGTH_R = [0, 20, 5]        # 0.0~2.0
+RANDOM_STRENGTH_R = [1, 10, 1]        # 0.0~2.0
 RANDOM_STRENGTH_SCALE = 0.1
 
 # GPU에서 subsample 쓰려면 bootstrap_type="Bernoulli"가 안전
-SUBSAMPLE_R    = [60, 100, 10]        # 0.6~1.0
+SUBSAMPLE_R    = [50, 100, 5]        # 0.6~1.0
 SUBSAMPLE_SCALE= 0.01
 
-RSM_R          = [60, 100, 10]        # feature sampling (colsample)
+RSM_R          = [50, 100, 10]        # feature sampling (colsample)
 RSM_SCALE      = 0.01
 
-MIN_DATA_IN_LEAF_R = [10, 80, 10]
+MIN_DATA_IN_LEAF_R = [5, 100, 5]
 
 # binning
-BORDER_COUNT_R = [128, 256, 128]
+BORDER_COUNT_R = [128, 256, 32]
 # ---------------------------------------------------------
 
 DATA_PATH  = "../../data/"
