@@ -72,7 +72,7 @@ TRAIN_PATH = f"{DATA_PATH}train.csv"
 MAP_PATH   = f"{DATA_PATH}preprocess_maps.json"
 
 TEMP_DIR   = "../../../FiledNet_pkl_temp/lgbm_hpo_pkl"
-OUT_DIR    = "hpo_results/lgbm"
+OUT_DIR    = "../../../FiledNet_pkl_temp/hpo_results/lgbm"
 
 # 누수 가능 컬럼 제거
 LEAKAGE_COLS = ["home_score", "away_score"]

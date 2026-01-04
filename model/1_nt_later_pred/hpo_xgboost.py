@@ -63,7 +63,7 @@ N_FUTURE_ACTIONS = 10
 N_FOLDS = 3
 SEED = 42
 
-N_ROUNDS = 50   # trial 자체는 늘려도 됨 (1 trial 시간 제한이 핵심)
+N_ROUNDS = 100   # trial 자체는 늘려도 됨 (1 trial 시간 제한이 핵심)
 
 # ---- [START, END, STEP] ranges ----
 # ✅ 핵심: n_prev가 커질수록 원핫 피처 수가 폭증 → 1~6로 강제 제한
@@ -114,7 +114,7 @@ TRAIN_PATH = f"{DATA_PATH}train.csv"
 MAP_PATH   = f"{DATA_PATH}preprocess_maps.json"
 
 TEMP_DIR   = "../../../FiledNet_pkl_temp/xgboost_hpo_pkl"
-OUT_DIR    = "hpo_results/xgboost"
+OUT_DIR    = "../../../FiledNet_pkl_temp/hpo_results/xgboost"
 
 # 누수 가능 컬럼 제거
 LEAKAGE_COLS = ["home_score", "away_score"]

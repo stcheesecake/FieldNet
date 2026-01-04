@@ -71,7 +71,7 @@ N_FUTURE_ACTIONS = 10
 N_FOLDS = 3
 SEED = 42
 
-N_ROUNDS = 50
+N_ROUNDS = 100
 
 # ---- [START, END, STEP] ranges ----
 # ✅ n_prev 커질수록 샘플(컬럼) 증가 → 제한
@@ -110,7 +110,7 @@ TRAIN_PATH = f"{DATA_PATH}train.csv"
 MAP_PATH   = f"{DATA_PATH}preprocess_maps.json"
 
 TEMP_DIR   = "../../../FiledNet_pkl_temp/catboost_hpo_pkl"
-OUT_DIR    = "hpo_results/catboost"
+OUT_DIR    = "../../../FiledNet_pkl_temp/hpo_results/catboost"
 
 LEAKAGE_COLS = ["home_score", "away_score"]
 
