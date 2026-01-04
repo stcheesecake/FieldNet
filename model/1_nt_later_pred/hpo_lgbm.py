@@ -9,9 +9,10 @@ import random
 import warnings
 from contextlib import suppress
 from datetime import datetime
+
 import numpy as np
 import pandas as pd
-import xgboost as xgb
+import lightgbm as lgb
 from tqdm import tqdm
 
 from sklearn.model_selection import GroupKFold
@@ -22,53 +23,56 @@ from sklearn.metrics import roc_auc_score, log_loss, brier_score_loss
 # HPO CONFIG (YOU EDIT HERE)
 # =========================================================
 N_FUTURE_ACTIONS = 10   # 고정(원하면 바꿔도 됨)
-N_FOLDS = 2
+N_FOLDS = 3
 SEED = 42
 
 N_ROUNDS = 3  # ✅ HPO trial 횟수
 
 # ---- [START, END, STEP] ranges ----
 # 정수 범위
-N_PREV_ACTIONS_R = [1, 20, 1]
-MAX_DEPTH_R      = [3, 10, 1]
-MIN_CHILD_W_R    = [10, 200, 10]
+N_PREV_ACTIONS_R      = [1, 20, 1]
 
-NUM_BOOST_R      = [100, 100, 100]
-EARLY_STOP_R     = [50, 400, 50]
+NUM_LEAVES_R          = [31, 255, 16]     # LGBM
+MAX_DEPTH_R           = [3, 12, 1]        # -1(무제한)도 가능하지만 HPO에선 제한 추천
+MIN_DATA_IN_LEAF_R    = [20, 400, 20]     # min_child_samples
+BAGGING_FREQ_R        = [0, 10, 1]        # 0이면 bagging off
+
+NUM_BOOST_R           = [200, 800, 200]
+EARLY_STOP_R          = [50, 200, 50]
+
+MAX_BIN_R             = [63, 255, 32]     # histogram bins (GPU일 때 너무 크면 느릴 수 있음)
 
 # 실수(0~1, 0~N 등) 범위는 "정수로 받고 scale로 나눠서" 쓰면 편함
-# 예) ETA_R=[1,100,1], ETA_SCALE=0.01 => 0.01~1.00
-ETA_R            = [1, 20, 1]
-ETA_SCALE        = 0.01
+LEARNING_RATE_R       = [5, 30, 1]
+LEARNING_RATE_SCALE   = 0.01              # 0.05 ~ 0.30
 
-SUBSAMPLE_R      = [20, 100, 5]
-SUBSAMPLE_SCALE  = 0.01
+BAGGING_FRAC_R        = [60, 100, 5]      # bagging_fraction
+BAGGING_FRAC_SCALE    = 0.01
 
-COLSAMPLE_R      = [20, 100, 5]
-COLSAMPLE_SCALE  = 0.01
+FEATURE_FRAC_R        = [60, 100, 5]      # feature_fraction
+FEATURE_FRAC_SCALE    = 0.01
 
-REG_LAMBDA_R     = [0, 200, 10]
-REG_LAMBDA_SCALE = 0.01
+LAMBDA_L2_R           = [0, 200, 10]      # lambda_l2
+LAMBDA_L2_SCALE       = 0.01              # 0.00 ~ 2.00
 
-# ---- optional extra tunables (기본은 고정값 1개로 두고 필요 시 범위 늘리면 됨) ----
-GAMMA_R          = [0, 100, 1]      # min_split_loss
-GAMMA_SCALE      = 0.01
+LAMBDA_L1_R           = [0, 200, 10]      # lambda_l1
+LAMBDA_L1_SCALE       = 0.01
 
-REG_ALPHA_R      = [0, 100, 1]
-REG_ALPHA_SCALE  = 0.01
+MIN_GAIN_R            = [0, 100, 1]       # min_gain_to_split
+MIN_GAIN_SCALE        = 0.01              # 0.00 ~ 1.00
 
-SCALE_POS_W_R    = [1, 100, 1]      # class imbalance 대응 (캘리브레이션 깨질 수 있어서 기본 고정 추천)
-# scale_pos_weight는 scale 필요 없음(그냥 정수/실수 그대로 쓰면 됨)
+MIN_SUM_HESSIAN_R     = [1, 50, 1]        # min_sum_hessian_in_leaf
+MIN_SUM_HESSIAN_SCALE = 0.1               # 0.1 ~ 5.0
 
-MAX_BIN_R        = [64, 512, 64]  # hist bin
+SCALE_POS_W_R         = [1, 100, 1]       # class imbalance 대응 (캘리브레이션 깨질 수 있음)
 # ---------------------------------------------------------
 
-DATA_PATH  = "../data/"
+DATA_PATH  = "../../data/"
 TRAIN_PATH = f"{DATA_PATH}train.csv"
 MAP_PATH   = f"{DATA_PATH}preprocess_maps.json"
 
-TEMP_DIR   = "../../FiledNet_pkl_temp/xgboost_hpo_pkl"
-OUT_DIR    = "./hpo_results"
+TEMP_DIR   = "../../../FiledNet_pkl_temp/lgbm_hpo_pkl"
+OUT_DIR    = "hpo_results/lgbm"
 
 # 누수 가능 컬럼 제거
 LEAKAGE_COLS = ["home_score", "away_score"]
@@ -499,11 +503,11 @@ def sample_from(vals, rs: np.random.RandomState):
 
 
 def compact_params_str(p: dict):
-    # postfix가 너무 길면 보기 힘들어서 핵심만 짧게
     return (
-        f"prev={p['n_prev']},eta={p['eta']},md={p['max_depth']},"
-        f"ss={p['subsample']},cs={p['colsample_bytree']},"
-        f"mcw={p['min_child_weight']},l2={p['reg_lambda']},"
+        f"prev={p['n_prev']},lr={p['learning_rate']},nl={p['num_leaves']},md={p['max_depth']},"
+        f"ff={p['feature_fraction']},bf={p['bagging_fraction']},bq={p['bagging_freq']},"
+        f"leaf={p['min_data_in_leaf']},hess={p['min_sum_hessian_in_leaf']},"
+        f"l2={p['lambda_l2']},l1={p['lambda_l1']},gain={p['min_gain_to_split']},"
         f"nb={p['num_boost_round']},es={p['early_stop']}"
     )
 
@@ -525,30 +529,35 @@ def run_cv_eval(samples: pd.DataFrame, params: dict):
     gkf = GroupKFold(n_splits=N_FOLDS)
     oof_pred = np.zeros(len(samples), dtype=float)
 
-    # XGB params
-    train_params = dict(
-        objective="binary:logistic",
-        eval_metric="logloss",
-        eta=params["eta"],
+    base_lgb_params = dict(
+        objective="binary",
+        metric="binary_logloss",
+        learning_rate=params["learning_rate"],
+        num_leaves=params["num_leaves"],
         max_depth=params["max_depth"],
-        subsample=params["subsample"],
-        colsample_bytree=params["colsample_bytree"],
-        reg_lambda=params["reg_lambda"],
-        min_child_weight=params["min_child_weight"],
-
-        gamma=params["gamma"],
-        reg_alpha=params["reg_alpha"],
-        scale_pos_weight=params["scale_pos_weight"],
+        min_data_in_leaf=params["min_data_in_leaf"],
+        min_sum_hessian_in_leaf=params["min_sum_hessian_in_leaf"],
+        feature_fraction=params["feature_fraction"],
+        bagging_fraction=params["bagging_fraction"],
+        bagging_freq=params["bagging_freq"],
+        lambda_l2=params["lambda_l2"],
+        lambda_l1=params["lambda_l1"],
+        min_gain_to_split=params["min_gain_to_split"],
         max_bin=params["max_bin"],
+        scale_pos_weight=params["scale_pos_weight"],
+        verbose=-1,
 
-        tree_method="hist",
+        # seeds
         seed=SEED,
+        feature_fraction_seed=SEED,
+        bagging_seed=SEED,
+        data_random_seed=SEED,
+        deterministic=True,
     )
 
+    # GPU (가능하면 사용, 안되면 자동 CPU fallback)
     if USE_GPU:
-        train_params["device"] = "cuda"
-    else:
-        train_params["device"] = "cpu"
+        base_lgb_params.update({"device_type": "gpu"})
 
     num_boost_round = params["num_boost_round"]
     early_stop = params["early_stop"]
@@ -558,24 +567,42 @@ def run_cv_eval(samples: pd.DataFrame, params: dict):
         Xtr, Xva = X.iloc[tr_idx], X.iloc[va_idx]
         ytr, yva = y[tr_idx], y[va_idx]
 
-        dtr = xgb.DMatrix(Xtr, label=ytr, feature_names=X.columns.tolist())
-        dva = xgb.DMatrix(Xva, label=yva, feature_names=X.columns.tolist())
+        dtr = lgb.Dataset(Xtr, label=ytr, free_raw_data=True)
+        dva = lgb.Dataset(Xva, label=yva, reference=dtr, free_raw_data=True)
 
-        bst = xgb.train(
-            params=train_params,
-            dtrain=dtr,
-            num_boost_round=num_boost_round,
-            evals=[(dva, "valid")],
-            early_stopping_rounds=early_stop,
-            verbose_eval=False
-        )
+        try:
+            bst = lgb.train(
+                params=base_lgb_params,
+                train_set=dtr,
+                num_boost_round=num_boost_round,
+                valid_sets=[dva],
+                valid_names=["valid"],
+                callbacks=[
+                    lgb.early_stopping(stopping_rounds=early_stop, verbose=False),
+                    lgb.log_evaluation(period=0),
+                ],
+            )
+        except Exception:
+            # GPU 미지원/드라이버 이슈 등 -> CPU 재시도
+            cpu_params = dict(base_lgb_params)
+            cpu_params.pop("device_type", None)
+            bst = lgb.train(
+                params=cpu_params,
+                train_set=dtr,
+                num_boost_round=num_boost_round,
+                valid_sets=[dva],
+                valid_names=["valid"],
+                callbacks=[
+                    lgb.early_stopping(stopping_rounds=early_stop, verbose=False),
+                    lgb.log_evaluation(period=0),
+                ],
+            )
 
         best_iter = getattr(bst, "best_iteration", None)
-        if best_iter is not None and best_iter >= 0:
-            pred = bst.predict(dva, iteration_range=(0, best_iter + 1))
-        else:
-            pred = bst.predict(dva)
+        if best_iter is None or best_iter <= 0:
+            best_iter = bst.current_iteration()
 
+        pred = bst.predict(Xva, num_iteration=best_iter)
         oof_pred[va_idx] = pred
 
     # OOF metrics
@@ -612,10 +639,6 @@ def main():
     os.makedirs(OUT_DIR, exist_ok=True)
     set_all_seeds(SEED)
 
-    # xgboost global verbosity off
-    with suppress(Exception):
-        xgb.set_config(verbosity=0)
-
     # maps
     maps, code_to_str, code_to_type, code_to_result, goal_codes, own_goal_codes, shot_codes = build_code_maps_from_json(MAP_PATH)
 
@@ -634,21 +657,28 @@ def main():
     attack_map = estimate_attack_direction(train, shot_codes)
 
     # build value grids (discrete)
-    prev_vals   = build_values(N_PREV_ACTIONS_R, as_int=True)
-    eta_vals    = build_values(ETA_R, scale=ETA_SCALE, as_int=False)
-    md_vals     = build_values(MAX_DEPTH_R, as_int=True)
-    ss_vals     = build_values(SUBSAMPLE_R, scale=SUBSAMPLE_SCALE, as_int=False)
-    cs_vals     = build_values(COLSAMPLE_R, scale=COLSAMPLE_SCALE, as_int=False)
-    l2_vals     = build_values(REG_LAMBDA_R, scale=REG_LAMBDA_SCALE, as_int=False)
-    mcw_vals    = build_values(MIN_CHILD_W_R, as_int=True)
+    prev_vals = build_values(N_PREV_ACTIONS_R, as_int=True)
 
-    nb_vals     = build_values(NUM_BOOST_R, as_int=True)
-    es_vals     = build_values(EARLY_STOP_R, as_int=True)
+    lr_vals   = build_values(LEARNING_RATE_R, scale=LEARNING_RATE_SCALE, as_int=False)
+    nl_vals   = build_values(NUM_LEAVES_R, as_int=True)
+    md_vals   = build_values(MAX_DEPTH_R, as_int=True)
+    leaf_vals = build_values(MIN_DATA_IN_LEAF_R, as_int=True)
+    hess_vals = build_values(MIN_SUM_HESSIAN_R, scale=MIN_SUM_HESSIAN_SCALE, as_int=False)
 
-    gamma_vals  = build_values(GAMMA_R, scale=GAMMA_SCALE, as_int=False)
-    alpha_vals  = build_values(REG_ALPHA_R, scale=REG_ALPHA_SCALE, as_int=False)
-    spw_vals    = build_values(SCALE_POS_W_R, as_int=False)
+    ff_vals   = build_values(FEATURE_FRAC_R, scale=FEATURE_FRAC_SCALE, as_int=False)
+    bf_vals   = build_values(BAGGING_FRAC_R, scale=BAGGING_FRAC_SCALE, as_int=False)
+    bq_vals   = build_values(BAGGING_FREQ_R, as_int=True)
+
+    l2_vals   = build_values(LAMBDA_L2_R, scale=LAMBDA_L2_SCALE, as_int=False)
+    l1_vals   = build_values(LAMBDA_L1_R, scale=LAMBDA_L1_SCALE, as_int=False)
+    gain_vals = build_values(MIN_GAIN_R, scale=MIN_GAIN_SCALE, as_int=False)
+
     maxbin_vals = build_values(MAX_BIN_R, as_int=True)
+
+    nb_vals   = build_values(NUM_BOOST_R, as_int=True)
+    es_vals   = build_values(EARLY_STOP_R, as_int=True)
+
+    spw_vals  = build_values(SCALE_POS_W_R, as_int=False)
 
     rs = np.random.RandomState(SEED)
 
@@ -668,30 +698,33 @@ def main():
         os.remove(csv_path)
 
     csv_header_written = False
-
-
     trials = []
-
-
 
     pbar = tqdm(range(1, N_ROUNDS + 1), total=N_ROUNDS, desc="HPO", dynamic_ncols=True)
     for t_idx in pbar:
-        # sample one combination
         params = {
-            "n_prev":           sample_from(prev_vals, rs),
-            "eta":              sample_from(eta_vals, rs),
-            "max_depth":        sample_from(md_vals, rs),
-            "subsample":        sample_from(ss_vals, rs),
-            "colsample_bytree": sample_from(cs_vals, rs),
-            "reg_lambda":       sample_from(l2_vals, rs),
-            "min_child_weight": sample_from(mcw_vals, rs),
-            "num_boost_round":  sample_from(nb_vals, rs),
-            "early_stop":       sample_from(es_vals, rs),
+            "n_prev":                   sample_from(prev_vals, rs),
 
-            "gamma":            sample_from(gamma_vals, rs),
-            "reg_alpha":        sample_from(alpha_vals, rs),
-            "scale_pos_weight": sample_from(spw_vals, rs),
-            "max_bin":          sample_from(maxbin_vals, rs),
+            "learning_rate":            sample_from(lr_vals, rs),
+            "num_leaves":               sample_from(nl_vals, rs),
+            "max_depth":                sample_from(md_vals, rs),
+            "min_data_in_leaf":         sample_from(leaf_vals, rs),
+            "min_sum_hessian_in_leaf":  sample_from(hess_vals, rs),
+
+            "feature_fraction":         sample_from(ff_vals, rs),
+            "bagging_fraction":         sample_from(bf_vals, rs),
+            "bagging_freq":             sample_from(bq_vals, rs),
+
+            "lambda_l2":                sample_from(l2_vals, rs),
+            "lambda_l1":                sample_from(l1_vals, rs),
+            "min_gain_to_split":        sample_from(gain_vals, rs),
+
+            "max_bin":                  sample_from(maxbin_vals, rs),
+
+            "scale_pos_weight":         sample_from(spw_vals, rs),
+
+            "num_boost_round":          sample_from(nb_vals, rs),
+            "early_stop":               sample_from(es_vals, rs),
         }
 
         # samples (cached per prev)
@@ -715,6 +748,7 @@ def main():
 
         rec = {"trial": t_idx, **params, **metrics}
         trials.append(rec)
+
         # ✅ trial 끝날 때마다 csv에 즉시 append
         df_one = pd.DataFrame([rec])
         df_one.to_csv(
