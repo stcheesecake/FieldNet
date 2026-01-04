@@ -9,7 +9,7 @@ TRAIN_OUT = "train.csv"
 TEST_OUT  = "test.csv"
 
 TEST_RATIO = 0.2
-SEED = 2025
+SEED = 42
 
 # =========================
 # LOAD

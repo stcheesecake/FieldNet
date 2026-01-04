@@ -13,17 +13,17 @@ from sklearn.metrics import roc_auc_score, log_loss, brier_score_loss
 # =========================
 # CONFIG
 # =========================
-TARGET_TIME_MIN = 10     # ✅ N분 내 득점
-LOOKBACK_MIN    = 10     # 최근 N분 집계 피처
+TARGET_TIME_MIN = 0.2     # 타겟값 생성 feature - n분 내에 값을 쓸건지
+LOOKBACK_MIN    = 0.1     # 입력값 생성 feature
 N_FOLDS         = 5
-SEED            = 2025
+SEED            = 42
 
 DATA_PATH       = "../data/"
 TRAIN_PATH      = f"{DATA_PATH}train.csv"
 PREPROCESS_PATH = f"{DATA_PATH}preprocess.csv"         # 참고용(사용 안 해도 됨)
 MAP_PATH        = f"{DATA_PATH}preprocess_maps.json"   # ✅ 여기서 type_result 매핑 읽음
 
-MODEL_OUT       = "goal10m_model.pkl"
+MODEL_OUT       = f"SEED{SEED}TIME{TARGET_TIME_MIN}goal10m_model.pkl"
 
 # Build samples 캐시 저장 폴더
 TEMP_DIR        = "../temp"
@@ -329,20 +329,14 @@ def load_samples_cache():
         return None
 
     sig_now = file_signature(TRAIN_PATH)
-    need = {
-        "TARGET_TIME_MIN": TARGET_TIME_MIN,
-        "LOOKBACK_MIN": LOOKBACK_MIN,
-        "TRAIN_SIG": sig_now,
-    }
 
-    # 설정/파일이 동일할 때만 캐시 사용
-    if meta.get("TARGET_TIME_MIN") != need["TARGET_TIME_MIN"]:
+    if meta.get("TARGET_TIME_MIN") != TARGET_TIME_MIN:
         return None
-    if meta.get("LOOKBACK_MIN") != need["LOOKBACK_MIN"]:
+    if meta.get("LOOKBACK_MIN") != LOOKBACK_MIN:
         return None
 
     ms = meta.get("TRAIN_SIG", {})
-    if (ms.get("size") != need["TRAIN_SIG"]["size"]) or (ms.get("mtime") != need["TRAIN_SIG"]["mtime"]):
+    if (ms.get("size") != sig_now["size"]) or (ms.get("mtime") != sig_now["mtime"]):
         return None
 
     try:
@@ -370,7 +364,6 @@ def main():
     horizon_sec = TARGET_TIME_MIN * 60
     lookback_sec = LOOKBACK_MIN * 60
 
-    # ✅ 매핑/코드: preprocess_maps.json 사용
     maps, code_to_str, code_to_type, goal_codes, own_goal_codes, shot_codes = build_code_maps_from_json(MAP_PATH)
 
     # ===== 샘플 캐시 로드 시도 =====
@@ -379,27 +372,20 @@ def main():
     if samples is None:
         train = pd.read_csv(TRAIN_PATH)
 
-        # 누적시간 t 생성
         train = train.copy()
         train["t"] = [match_time_seconds(p, s) for p, s in zip(train["period_id"], train["time_seconds"])]
 
-        # 누수 피처 제거(있으면)
         train = train.drop(columns=[c for c in LEAKAGE_COLS if c in train.columns], errors="ignore")
 
-        # teams_by_game: home/away 우선
         teams_by_game = get_teams_by_game(train)
 
-        # 공격방향 추정 후 좌표 정규화
         attack_map = estimate_attack_direction(train, shot_codes)
         train = normalize_xy_df(train, attack_map)
 
-        # goal_times
         goal_times = build_goal_times(train, goal_codes, own_goal_codes, teams_by_game)
 
-        # samples 생성
         samples = make_team_perspective_samples(train, code_to_type, goal_times, teams_by_game, horizon_sec, lookback_sec)
 
-        # 캐시 저장
         save_samples_cache(samples)
 
     # ===== 학습/검증 =====
@@ -410,7 +396,7 @@ def main():
 
     params = dict(
         objective="binary",
-        metric="None",          # ✅ 기본 metric 제거 (커스텀 brier로 early stopping)
+        metric="None",
         learning_rate=0.05,
         num_leaves=63,
         min_data_in_leaf=200,
@@ -445,10 +431,10 @@ def main():
             num_boost_round=5000,
             valid_sets=[dva],
             valid_names=["valid"],
-            feval=feval_brier,   # ✅ brier를 eval로 제공
+            feval=feval_brier,
             callbacks=[
                 lgb.early_stopping(200, verbose=False),
-                lgb.log_evaluation(0),  # 출력 억제
+                lgb.log_evaluation(0),
             ]
         )
 
@@ -456,7 +442,6 @@ def main():
         oof_pred[va_idx] = pred
         models.append(model)
 
-        # fold metrics 저장(출력 X)
         auc = roc_auc_score(yva, pred) if len(np.unique(yva)) > 1 else float("nan")
         ll  = log_loss(yva, np.clip(pred, 1e-6, 1-1e-6))
         bs  = brier_score_loss(yva, pred)
@@ -502,8 +487,14 @@ def main():
     df_oof = samples[["game_id", "team_id", "t", "minute"]].copy()
     df_oof["y"] = y_all
     df_oof["pred"] = pred_all
+
     time_brier = time_binned_brier(df_oof, bin_minutes=(0, 15, 30, 45, 60, 75, 90, 120))
     time_brier.to_csv("oof_time_brier.csv", index=False, encoding="utf-8-sig")
+
+    # ✅ 추가 저장: OOF 샘플별 y/pred 결과
+    # - 나중에 특정 "검증 경기(game_id)" 한 개만 필터해서 보면 됨
+    df_oof_out = df_oof[["game_id", "team_id", "t", "minute", "y", "pred"]].copy()
+    df_oof_out.to_csv("oof_predictions.csv", index=False, encoding="utf-8-sig")
 
     # 리포트 저장
     report = {
