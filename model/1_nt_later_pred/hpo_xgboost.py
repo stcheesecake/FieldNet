@@ -28,7 +28,7 @@ N_FUTURE_ACTIONS = 10
 N_FOLDS = 3
 SEED = 42
 
-N_ROUNDS = 30   # trial 자체는 늘려도 됨 (1 trial 시간 제한이 핵심)
+N_ROUNDS = 50   # trial 자체는 늘려도 됨 (1 trial 시간 제한이 핵심)
 
 # ---- [START, END, STEP] ranges ----
 # ✅ 핵심: n_prev가 커질수록 원핫 피처 수가 폭증 → 1~6로 강제 제한
