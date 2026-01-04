@@ -20,6 +20,9 @@ from sklearn.metrics import roc_auc_score, log_loss, brier_score_loss
 # ✅ CatBoost
 from catboost import CatBoostClassifier, Pool
 
+# ✅ Optuna (Random Search -> Optuna)
+import optuna
+
 
 # =========================================================
 # One-line progress (CatBoost)
@@ -68,7 +71,7 @@ class OneLineCatBoostProgress:
 # HPO CONFIG (YOU EDIT HERE)  ✅ 10분 내 1 trial 목표
 # =========================================================
 N_FUTURE_ACTIONS = 10
-N_FOLDS = 3
+N_FOLDS = 5
 SEED = 42
 
 N_ROUNDS = 500
@@ -526,10 +529,6 @@ def build_values(rng3, scale=1.0, as_int=False):
     return out
 
 
-def sample_from(vals, rs: np.random.RandomState):
-    return vals[int(rs.randint(0, len(vals)))]
-
-
 def compact_params_str(p: dict):
     rsm_str = f",rsm={p['rsm']}" if ("rsm" in p and p["rsm"] is not None) else ""
     return (
@@ -612,7 +611,10 @@ def run_cv_eval(samples: pd.DataFrame, params: dict, outer_pbar=None, best_gette
 
         if outer_pbar is not None:
             # ✅ GPU에서도 최소한 "지금 몇 fold 도는지"는 postfix로 표시 가능
-            outer_pbar.set_postfix_str(f"Fold {fold+1}/{N_FOLDS} running... | {(best_getter() if callable(best_getter) else '')}", refresh=True)
+            outer_pbar.set_postfix_str(
+                f"Fold {fold+1}/{N_FOLDS} running... | {(best_getter() if callable(best_getter) else '')}",
+                refresh=True
+            )
 
         # ✅ GPU면 callbacks=None 으로 호출
         model.fit(
@@ -658,6 +660,9 @@ def main():
     os.makedirs(OUT_DIR, exist_ok=True)
     set_all_seeds(SEED)
 
+    # Optuna 로그 조용히
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+
     maps, code_to_str, code_to_type, code_to_result, goal_codes, own_goal_codes, shot_codes = build_code_maps_from_json(MAP_PATH)
 
     train = pd.read_csv(TRAIN_PATH).copy()
@@ -673,7 +678,7 @@ def main():
     teams_by_game = get_teams_by_game(train)
     attack_map = estimate_attack_direction(train, shot_codes)
 
-    # value grids
+    # value grids (그대로 유지)
     prev_vals   = build_values(N_PREV_ACTIONS_R, as_int=True)
 
     iter_vals   = build_values(ITER_R, as_int=True)
@@ -689,8 +694,6 @@ def main():
 
     minleaf_vals = build_values(MIN_DATA_IN_LEAF_R, as_int=True)
     border_vals  = build_values(BORDER_COUNT_R, as_int=True)
-
-    rs = np.random.RandomState(SEED)
 
     best = {
         "trial": -1,
@@ -714,6 +717,10 @@ def main():
         os.remove(csv_path)
     csv_header_written = False
 
+    # ✅ Optuna Study (TPE Sampler)
+    sampler = optuna.samplers.TPESampler(seed=SEED)
+    study = optuna.create_study(direction="minimize", sampler=sampler)
+
     pbar = tqdm(
         range(1, N_ROUNDS + 1),
         total=N_ROUNDS,
@@ -723,29 +730,32 @@ def main():
         mininterval=0.1,
     )
 
+    # ✅ Optuna ask/tell로 기존 for-loop 형태 유지 (나머지 로직 그대로)
     for t_idx in pbar:
+        trial = study.ask()
+
         params = {
-            "n_prev": sample_from(prev_vals, rs),
+            "n_prev": trial.suggest_categorical("n_prev", prev_vals),
 
-            "iterations": sample_from(iter_vals, rs),
-            "od_wait": sample_from(od_vals, rs),
+            "iterations": trial.suggest_categorical("iterations", iter_vals),
+            "od_wait": trial.suggest_categorical("od_wait", od_vals),
 
-            "learning_rate": sample_from(lr_vals, rs),
-            "depth": sample_from(depth_vals, rs),
-            "l2_leaf_reg": sample_from(l2_vals, rs),
-            "random_strength": sample_from(rs_vals, rs),
+            "learning_rate": trial.suggest_categorical("learning_rate", lr_vals),
+            "depth": trial.suggest_categorical("depth", depth_vals),
+            "l2_leaf_reg": trial.suggest_categorical("l2_leaf_reg", l2_vals),
+            "random_strength": trial.suggest_categorical("random_strength", rs_vals),
 
-            "subsample": sample_from(ss_vals, rs),
+            "subsample": trial.suggest_categorical("subsample", ss_vals),
 
-            "min_data_in_leaf": sample_from(minleaf_vals, rs),
-            "border_count": sample_from(border_vals, rs),
+            "min_data_in_leaf": trial.suggest_categorical("min_data_in_leaf", minleaf_vals),
+            "border_count": trial.suggest_categorical("border_count", border_vals),
         }
 
-        # ✅ CPU일 때만 rsm 튜닝
+        # ✅ CPU일 때만 rsm 튜닝 (기존 동일)
         if not USE_GPU:
-            params["rsm"] = sample_from(rsm_vals, rs)
+            params["rsm"] = trial.suggest_categorical("rsm", rsm_vals)
 
-        # samples cached per prev
+        # samples cached per prev (기존 동일)
         samples = load_samples_cache(N_FUTURE_ACTIONS, params["n_prev"])
         if samples is None:
             samples = make_event_based_samples(
@@ -763,7 +773,11 @@ def main():
 
         metrics = run_cv_eval(samples, params, outer_pbar=pbar, best_getter=best_str)
 
-        rec = {"trial": t_idx, **params, **metrics}
+        # ✅ Optuna에 결과 반영 (minimize=brier)
+        study.tell(trial, metrics["brier"])
+
+        # CSV 기록 (기존 동일)
+        rec = {"trial": t_idx, "optuna_trial": int(trial.number), **params, **metrics}
         pd.DataFrame([rec]).to_csv(
             csv_path,
             index=False,
@@ -773,6 +787,7 @@ def main():
         )
         csv_header_written = True
 
+        # best 갱신 (기존 동일)
         if metrics["brier"] < best["brier"]:
             best.update({
                 "trial": t_idx,
