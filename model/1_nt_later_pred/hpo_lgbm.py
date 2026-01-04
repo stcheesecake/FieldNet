@@ -3,78 +3,109 @@
 
 import os
 import json
-import pickle
 import math
 import random
 import warnings
-from contextlib import suppress
+from contextlib import suppress, redirect_stdout, redirect_stderr
 from datetime import datetime
+import time
+import io
 
 import numpy as np
 import pandas as pd
-import lightgbm as lgb
 from tqdm import tqdm
 
 from sklearn.model_selection import GroupKFold
 from sklearn.metrics import roc_auc_score, log_loss, brier_score_loss
 
+# ✅ LightGBM
+import lightgbm as lgb
+
 
 # =========================================================
-# HPO CONFIG (YOU EDIT HERE)
+# One-line progress (LightGBM)
 # =========================================================
-N_FUTURE_ACTIONS = 10   # 고정(원하면 바꿔도 됨)
+class OneLineLGBMProgress:
+    """
+    LightGBM training progress -> update outer HPO tqdm postfix (single line).
+    LightGBM callback: callback(env) where env.iteration is 0-based.
+    """
+    def __init__(self, outer_pbar: tqdm, fold_idx: int, n_folds: int, total_iters: int,
+                 best_getter, update_every: int = 25, min_sec: float = 0.4):
+        self.outer_pbar = outer_pbar
+        self.fold_idx = int(fold_idx)
+        self.n_folds = int(n_folds)
+        self.total_iters = int(total_iters)
+        self.best_getter = best_getter
+        self.update_every = int(update_every)
+        self.min_sec = float(min_sec)
+
+        self._last_iter = 0
+        self._last_time = 0.0
+
+    def __call__(self, env):
+        # env.iteration is 0-based
+        cur = int(getattr(env, "iteration", 0)) + 1
+        now = time.time()
+
+        if (cur == 1) or (cur - self._last_iter >= self.update_every) or (now - self._last_time >= self.min_sec):
+            pct = 100.0 * cur / max(self.total_iters, 1)
+            fold_str = f"Fold {self.fold_idx+1}/{self.n_folds}: {pct:>3.0f}% {cur}/{self.total_iters}"
+            best_str = self.best_getter() if callable(self.best_getter) else ""
+            msg = f"{fold_str} | {best_str}" if best_str else fold_str
+
+            self.outer_pbar.set_postfix_str(msg, refresh=True)
+            with suppress(Exception):
+                self.outer_pbar.refresh()
+
+            self._last_iter = cur
+            self._last_time = now
+
+
+# =========================================================
+# HPO CONFIG (YOU EDIT HERE)  ✅ 10분 내 1 trial 목표
+# =========================================================
+N_FUTURE_ACTIONS = 10
 N_FOLDS = 3
 SEED = 42
 
-N_ROUNDS = 3  # ✅ HPO trial 횟수
+N_ROUNDS = 100
 
 # ---- [START, END, STEP] ranges ----
-# 정수 범위
-N_PREV_ACTIONS_R      = [1, 20, 1]
+N_PREV_ACTIONS_R = [3, 10, 1]
 
-NUM_LEAVES_R          = [31, 255, 16]     # LGBM
-MAX_DEPTH_R           = [3, 12, 1]        # -1(무제한)도 가능하지만 HPO에선 제한 추천
-MIN_DATA_IN_LEAF_R    = [20, 400, 20]     # min_child_samples
-BAGGING_FREQ_R        = [0, 10, 1]        # 0이면 bagging off
+# ✅ 기존 CatBoost 범위를 LightGBM에 "그대로 대응" (키는 그대로 유지해서 main 변경 최소화)
+ITER_R         = [300, 1200, 150]     # num_boost_round
+OD_WAIT_R      = [30, 100, 10]        # early_stopping_rounds
 
-NUM_BOOST_R           = [200, 800, 200]
-EARLY_STOP_R          = [50, 200, 50]
+DEPTH_R        = [4, 8, 1]            # max_depth
+LR_R           = [3, 10, 1]           # 0.03~0.10
+LR_SCALE       = 0.01
 
-MAX_BIN_R             = [63, 255, 32]     # histogram bins (GPU일 때 너무 크면 느릴 수 있음)
+L2_R           = [10, 80, 10]         # 1.0~8.0  (lambda_l2)
+L2_SCALE       = 0.1
 
-# 실수(0~1, 0~N 등) 범위는 "정수로 받고 scale로 나눠서" 쓰면 편함
-LEARNING_RATE_R       = [5, 30, 1]
-LEARNING_RATE_SCALE   = 0.01              # 0.05 ~ 0.30
+RANDOM_STRENGTH_R = [0, 20, 5]        # 0.0~2.0  (min_gain_to_split로 약하게 매핑)
+RANDOM_STRENGTH_SCALE = 0.1
 
-BAGGING_FRAC_R        = [60, 100, 5]      # bagging_fraction
-BAGGING_FRAC_SCALE    = 0.01
+SUBSAMPLE_R    = [60, 100, 10]        # bagging_fraction
+SUBSAMPLE_SCALE= 0.01
 
-FEATURE_FRAC_R        = [60, 100, 5]      # feature_fraction
-FEATURE_FRAC_SCALE    = 0.01
+RSM_R          = [60, 100, 10]        # feature_fraction
+RSM_SCALE      = 0.01
 
-LAMBDA_L2_R           = [0, 200, 10]      # lambda_l2
-LAMBDA_L2_SCALE       = 0.01              # 0.00 ~ 2.00
+MIN_DATA_IN_LEAF_R = [10, 80, 10]     # min_data_in_leaf
 
-LAMBDA_L1_R           = [0, 200, 10]      # lambda_l1
-LAMBDA_L1_SCALE       = 0.01
-
-MIN_GAIN_R            = [0, 100, 1]       # min_gain_to_split
-MIN_GAIN_SCALE        = 0.01              # 0.00 ~ 1.00
-
-MIN_SUM_HESSIAN_R     = [1, 50, 1]        # min_sum_hessian_in_leaf
-MIN_SUM_HESSIAN_SCALE = 0.1               # 0.1 ~ 5.0
-
-SCALE_POS_W_R         = [1, 100, 1]       # class imbalance 대응 (캘리브레이션 깨질 수 있음)
+BORDER_COUNT_R = [128, 192, 64]      # max_bin
 # ---------------------------------------------------------
 
 DATA_PATH  = "../../data/"
 TRAIN_PATH = f"{DATA_PATH}train.csv"
 MAP_PATH   = f"{DATA_PATH}preprocess_maps.json"
 
-TEMP_DIR   = "../../../FiledNet_pkl_temp/lgbm_hpo_pkl"
-OUT_DIR    = "../../../FiledNet_pkl_temp/hpo_results/lgbm"
+TEMP_DIR   = "../../../FiledNet_pkl_temp/catboost_hpo_pkl"
+OUT_DIR    = "../../../FiledNet_pkl_temp/hpo_results/catboost"
 
-# 누수 가능 컬럼 제거
 LEAKAGE_COLS = ["home_score", "away_score"]
 
 # pitch
@@ -85,8 +116,10 @@ GOAL_Y      = 34.0
 GOAL_HALF_W = 3.66
 MID_X       = PITCH_X_MAX / 2.0
 
-# GPU 사용 (GPU 없으면 False로)
 USE_GPU = True
+
+# ✅ LightGBM GPU 사용 가능 여부 (main에서 조용히 판별 후 세팅)
+LGBM_USE_GPU = False
 
 
 # =========================================================
@@ -196,6 +229,32 @@ def goal_angle(x, y):
 def goal_distance(x, y):
     x = float(x); y = float(y)
     return float(math.sqrt((GOAL_X - x)**2 + (GOAL_Y - y)**2))
+
+
+def lightgbm_gpu_available_silent() -> bool:
+    """
+    GPU Tree Learner enabled 여부를 "출력 없이" 체크.
+    GPU 미빌드면 여기서 [Fatal]이 뜨는데, stdout/stderr redirect로 완전 숨김.
+    """
+    if not USE_GPU:
+        return False
+    try:
+        X = np.random.rand(64, 4)
+        y = np.random.randint(0, 2, size=64)
+        d = lgb.Dataset(X, label=y, free_raw_data=True)
+
+        params = {
+            "objective": "binary",
+            "metric": "binary_logloss",
+            "device_type": "gpu",
+            "verbosity": -1,
+        }
+
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            _ = lgb.train(params, d, num_boost_round=1)
+        return True
+    except Exception:
+        return False
 
 
 # =========================================================
@@ -338,7 +397,6 @@ def make_event_based_samples(df: pd.DataFrame,
     rows = []
     game_ids = sorted(df["game_id"].unique().tolist())
 
-    # ✅ 내부 tqdm 금지 (HPO tqdm 1줄만 보이게)
     for gid in game_ids:
         gid = int(gid)
         if gid not in teams_by_game:
@@ -468,28 +526,21 @@ def save_samples_cache(samples: pd.DataFrame, k_future_actions: int, n_prev_acti
 # RANGE → VALUES / SAMPLING
 # =========================================================
 def build_values(rng3, scale=1.0, as_int=False):
-    """
-    rng3: [start, end, step] (inclusive)
-    scale: multiply AFTER generating
-    """
     s, e, st = rng3
     if st == 0:
         vals = [s]
     else:
         vals = []
         v = s
-        # inclusive
         while v <= e + 1e-12:
             vals.append(v)
             v += st
 
     if scale != 1.0:
         vals = [round(float(v) * scale, 10) for v in vals]
-
     if as_int:
         vals = [int(round(v)) for v in vals]
 
-    # uniq
     out = []
     seen = set()
     for v in vals:
@@ -503,109 +554,119 @@ def sample_from(vals, rs: np.random.RandomState):
 
 
 def compact_params_str(p: dict):
+    rsm_str = f",rsm={p['rsm']}" if ("rsm" in p and p["rsm"] is not None) else ""
     return (
-        f"prev={p['n_prev']},lr={p['learning_rate']},nl={p['num_leaves']},md={p['max_depth']},"
-        f"ff={p['feature_fraction']},bf={p['bagging_fraction']},bq={p['bagging_freq']},"
-        f"leaf={p['min_data_in_leaf']},hess={p['min_sum_hessian_in_leaf']},"
-        f"l2={p['lambda_l2']},l1={p['lambda_l1']},gain={p['min_gain_to_split']},"
-        f"nb={p['num_boost_round']},es={p['early_stop']}"
+        f"prev={p['n_prev']},it={p['iterations']},od={p['od_wait']},"
+        f"lr={p['learning_rate']},d={p['depth']},l2={p['l2_leaf_reg']},"
+        f"ss={p['subsample']}{rsm_str},minleaf={p['min_data_in_leaf']},bc={p['border_count']}"
     )
 
 
 # =========================================================
-# CV EVAL (Brier 기준)
+# CV EVAL (Brier 기준) - LightGBM
 # =========================================================
-def run_cv_eval(samples: pd.DataFrame, params: dict):
-    # features
+def run_cv_eval(samples: pd.DataFrame, params: dict, outer_pbar=None, best_getter=None):
     base_drop = ["y", "game_id"]
     feature_df = samples.drop(columns=[c for c in base_drop if c in samples.columns], errors="ignore").copy()
-    cat_cols = [c for c in feature_df.columns if feature_df[c].dtype == "object"]
-    feature_df = pd.get_dummies(feature_df, columns=cat_cols, dummy_na=False)
 
     X = feature_df
     y = samples["y"].astype(int).values
     groups = samples["game_id"].values
 
+    # ✅ categorical 처리: object -> category (원핫 안함)
+    cat_cols = [c for c in X.columns if X[c].dtype == "object"]
+    for c in cat_cols:
+        X[c] = X[c].astype("category")
+
     gkf = GroupKFold(n_splits=N_FOLDS)
     oof_pred = np.zeros(len(samples), dtype=float)
 
-    base_lgb_params = dict(
-        objective="binary",
-        metric="binary_logloss",
-        learning_rate=params["learning_rate"],
-        num_leaves=params["num_leaves"],
-        max_depth=params["max_depth"],
-        min_data_in_leaf=params["min_data_in_leaf"],
-        min_sum_hessian_in_leaf=params["min_sum_hessian_in_leaf"],
-        feature_fraction=params["feature_fraction"],
-        bagging_fraction=params["bagging_fraction"],
-        bagging_freq=params["bagging_freq"],
-        lambda_l2=params["lambda_l2"],
-        lambda_l1=params["lambda_l1"],
-        min_gain_to_split=params["min_gain_to_split"],
-        max_bin=params["max_bin"],
-        scale_pos_weight=params["scale_pos_weight"],
-        verbose=-1,
+    # ✅ CatBoost depth -> LightGBM max_depth + num_leaves(안전 상한)
+    max_depth = int(params["depth"])
+    num_leaves = int(min(2 ** max_depth, 256))
 
-        # seeds
-        seed=SEED,
-        feature_fraction_seed=SEED,
-        bagging_seed=SEED,
-        data_random_seed=SEED,
-        deterministic=True,
-    )
+    # ✅ random_strength -> min_gain_to_split 약하게 매핑 (0~2.0)
+    min_gain_to_split = float(params["random_strength"]) * 0.1
 
-    # GPU (가능하면 사용, 안되면 자동 CPU fallback)
-    if USE_GPU:
-        base_lgb_params.update({"device_type": "gpu"})
+    lgb_params = {
+        "objective": "binary",
+        "metric": "binary_logloss",
+        "learning_rate": float(params["learning_rate"]),
+        "max_depth": max_depth,
+        "num_leaves": num_leaves,
+        "lambda_l2": float(params["l2_leaf_reg"]),
+        "min_data_in_leaf": int(params["min_data_in_leaf"]),
+        "feature_fraction": float(params.get("rsm", 1.0)),
+        "bagging_fraction": float(params["subsample"]),
+        "bagging_freq": 1,
+        "max_bin": int(params["border_count"]),
+        "min_gain_to_split": min_gain_to_split,
+        "seed": SEED,
+        "verbosity": -1,
+        "force_col_wise": True,
+    }
 
-    num_boost_round = params["num_boost_round"]
-    early_stop = params["early_stop"]
+    # ✅ GPU 사용은 "지원될 때만" (미지원이면 절대 GPU 시도 안함 → Fatal 안뜸)
+    lgb_params["device_type"] = "gpu" if LGBM_USE_GPU else "cpu"
 
-    # fold loop (no tqdm)
+    num_boost_round = int(params["iterations"])
+    early_stop = int(params["od_wait"])
+
     for fold, (tr_idx, va_idx) in enumerate(gkf.split(X, y, groups)):
         Xtr, Xva = X.iloc[tr_idx], X.iloc[va_idx]
         ytr, yva = y[tr_idx], y[va_idx]
 
-        dtr = lgb.Dataset(Xtr, label=ytr, free_raw_data=True)
-        dva = lgb.Dataset(Xva, label=yva, reference=dtr, free_raw_data=True)
+        dtr = lgb.Dataset(
+            Xtr, label=ytr,
+            categorical_feature=cat_cols if len(cat_cols) > 0 else "auto",
+            free_raw_data=False
+        )
+        dva = lgb.Dataset(
+            Xva, label=yva,
+            categorical_feature=cat_cols if len(cat_cols) > 0 else "auto",
+            free_raw_data=False
+        )
 
-        try:
-            bst = lgb.train(
-                params=base_lgb_params,
-                train_set=dtr,
-                num_boost_round=num_boost_round,
-                valid_sets=[dva],
-                valid_names=["valid"],
-                callbacks=[
-                    lgb.early_stopping(stopping_rounds=early_stop, verbose=False),
-                    lgb.log_evaluation(period=0),
-                ],
+        callbacks = [
+            lgb.early_stopping(stopping_rounds=early_stop, verbose=False),
+        ]
+        if outer_pbar is not None:
+            callbacks.append(
+                OneLineLGBMProgress(
+                    outer_pbar=outer_pbar,
+                    fold_idx=fold,
+                    n_folds=N_FOLDS,
+                    total_iters=num_boost_round,
+                    best_getter=best_getter,
+                    update_every=25,
+                    min_sec=0.4,
+                )
             )
-        except Exception:
-            # GPU 미지원/드라이버 이슈 등 -> CPU 재시도
-            cpu_params = dict(base_lgb_params)
-            cpu_params.pop("device_type", None)
+
+        if outer_pbar is not None:
+            outer_pbar.set_postfix_str(
+                f"Fold {fold+1}/{N_FOLDS} running... | {(best_getter() if callable(best_getter) else '')}",
+                refresh=True
+            )
+
+        # ✅ LightGBM 출력 완전 차단 (Info/Warn/Fatal 메시지 포함)
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
             bst = lgb.train(
-                params=cpu_params,
+                params=lgb_params,
                 train_set=dtr,
                 num_boost_round=num_boost_round,
                 valid_sets=[dva],
                 valid_names=["valid"],
-                callbacks=[
-                    lgb.early_stopping(stopping_rounds=early_stop, verbose=False),
-                    lgb.log_evaluation(period=0),
-                ],
+                callbacks=callbacks,
             )
 
         best_iter = getattr(bst, "best_iteration", None)
         if best_iter is None or best_iter <= 0:
-            best_iter = bst.current_iteration()
+            best_iter = num_boost_round
 
         pred = bst.predict(Xva, num_iteration=best_iter)
         oof_pred[va_idx] = pred
 
-    # OOF metrics
     pred_all = oof_pred
     y_all = y
 
@@ -628,6 +689,8 @@ def run_cv_eval(samples: pd.DataFrame, params: dict):
         "pos_rate": float(p0_all),
         "n_samples": int(len(samples)),
         "n_features": int(X.shape[1]),
+        "n_cat_features": int(len(cat_cols)),
+        "lgbm_device": "gpu" if LGBM_USE_GPU else "cpu",
     }
 
 
@@ -635,14 +698,17 @@ def run_cv_eval(samples: pd.DataFrame, params: dict):
 # MAIN (HPO)
 # =========================================================
 def main():
+    global LGBM_USE_GPU
+
     warnings.filterwarnings("ignore")
     os.makedirs(OUT_DIR, exist_ok=True)
     set_all_seeds(SEED)
 
-    # maps
+    # ✅ GPU 지원 여부 조용히 판별 (미지원이면 CPU로 자동)
+    LGBM_USE_GPU = lightgbm_gpu_available_silent()
+
     maps, code_to_str, code_to_type, code_to_result, goal_codes, own_goal_codes, shot_codes = build_code_maps_from_json(MAP_PATH)
 
-    # load train once
     train = pd.read_csv(TRAIN_PATH).copy()
     train["t"] = [match_time_seconds(p, s) for p, s in zip(train["period_id"], train["time_seconds"])]
 
@@ -656,29 +722,22 @@ def main():
     teams_by_game = get_teams_by_game(train)
     attack_map = estimate_attack_direction(train, shot_codes)
 
-    # build value grids (discrete)
-    prev_vals = build_values(N_PREV_ACTIONS_R, as_int=True)
+    # value grids
+    prev_vals   = build_values(N_PREV_ACTIONS_R, as_int=True)
 
-    lr_vals   = build_values(LEARNING_RATE_R, scale=LEARNING_RATE_SCALE, as_int=False)
-    nl_vals   = build_values(NUM_LEAVES_R, as_int=True)
-    md_vals   = build_values(MAX_DEPTH_R, as_int=True)
-    leaf_vals = build_values(MIN_DATA_IN_LEAF_R, as_int=True)
-    hess_vals = build_values(MIN_SUM_HESSIAN_R, scale=MIN_SUM_HESSIAN_SCALE, as_int=False)
+    iter_vals   = build_values(ITER_R, as_int=True)
+    od_vals     = build_values(OD_WAIT_R, as_int=True)
+    depth_vals  = build_values(DEPTH_R, as_int=True)
 
-    ff_vals   = build_values(FEATURE_FRAC_R, scale=FEATURE_FRAC_SCALE, as_int=False)
-    bf_vals   = build_values(BAGGING_FRAC_R, scale=BAGGING_FRAC_SCALE, as_int=False)
-    bq_vals   = build_values(BAGGING_FREQ_R, as_int=True)
+    lr_vals     = build_values(LR_R, scale=LR_SCALE, as_int=False)
+    l2_vals     = build_values(L2_R, scale=L2_SCALE, as_int=False)
+    rs_vals     = build_values(RANDOM_STRENGTH_R, scale=RANDOM_STRENGTH_SCALE, as_int=False)
 
-    l2_vals   = build_values(LAMBDA_L2_R, scale=LAMBDA_L2_SCALE, as_int=False)
-    l1_vals   = build_values(LAMBDA_L1_R, scale=LAMBDA_L1_SCALE, as_int=False)
-    gain_vals = build_values(MIN_GAIN_R, scale=MIN_GAIN_SCALE, as_int=False)
+    ss_vals     = build_values(SUBSAMPLE_R, scale=SUBSAMPLE_SCALE, as_int=False)
+    rsm_vals    = build_values(RSM_R, scale=RSM_SCALE, as_int=False)
 
-    maxbin_vals = build_values(MAX_BIN_R, as_int=True)
-
-    nb_vals   = build_values(NUM_BOOST_R, as_int=True)
-    es_vals   = build_values(EARLY_STOP_R, as_int=True)
-
-    spw_vals  = build_values(SCALE_POS_W_R, as_int=False)
+    minleaf_vals = build_values(MIN_DATA_IN_LEAF_R, as_int=True)
+    border_vals  = build_values(BORDER_COUNT_R, as_int=True)
 
     rs = np.random.RandomState(SEED)
 
@@ -690,44 +749,51 @@ def main():
         "metrics": None,
     }
 
+    def best_str():
+        if best["trial"] < 0 or best["params"] is None:
+            return "best#-"
+        return (
+            f"best#{best['trial']} brier={best['brier']:.5f} nbs={best['nbs']:.5f} | "
+            f"{compact_params_str(best['params'])}"
+        )
+
     run_tag = datetime.now().strftime("%y%m%d_%H%M%S")
     csv_path = os.path.join(OUT_DIR, f"{run_tag}_hpo.csv")
-
-    # 혹시 같은 이름 파일이 이미 있으면 삭제(원하면 주석)
     if os.path.exists(csv_path):
         os.remove(csv_path)
-
     csv_header_written = False
-    trials = []
 
-    pbar = tqdm(range(1, N_ROUNDS + 1), total=N_ROUNDS, desc="HPO", dynamic_ncols=True)
+    pbar = tqdm(
+        range(1, N_ROUNDS + 1),
+        total=N_ROUNDS,
+        desc="HPO",
+        dynamic_ncols=True,
+        leave=True,
+        mininterval=0.1,
+    )
+
     for t_idx in pbar:
         params = {
-            "n_prev":                   sample_from(prev_vals, rs),
+            "n_prev": sample_from(prev_vals, rs),
 
-            "learning_rate":            sample_from(lr_vals, rs),
-            "num_leaves":               sample_from(nl_vals, rs),
-            "max_depth":                sample_from(md_vals, rs),
-            "min_data_in_leaf":         sample_from(leaf_vals, rs),
-            "min_sum_hessian_in_leaf":  sample_from(hess_vals, rs),
+            "iterations": sample_from(iter_vals, rs),
+            "od_wait": sample_from(od_vals, rs),
 
-            "feature_fraction":         sample_from(ff_vals, rs),
-            "bagging_fraction":         sample_from(bf_vals, rs),
-            "bagging_freq":             sample_from(bq_vals, rs),
+            "learning_rate": sample_from(lr_vals, rs),
+            "depth": sample_from(depth_vals, rs),
+            "l2_leaf_reg": sample_from(l2_vals, rs),
+            "random_strength": sample_from(rs_vals, rs),
 
-            "lambda_l2":                sample_from(l2_vals, rs),
-            "lambda_l1":                sample_from(l1_vals, rs),
-            "min_gain_to_split":        sample_from(gain_vals, rs),
+            "subsample": sample_from(ss_vals, rs),
 
-            "max_bin":                  sample_from(maxbin_vals, rs),
-
-            "scale_pos_weight":         sample_from(spw_vals, rs),
-
-            "num_boost_round":          sample_from(nb_vals, rs),
-            "early_stop":               sample_from(es_vals, rs),
+            "min_data_in_leaf": sample_from(minleaf_vals, rs),
+            "border_count": sample_from(border_vals, rs),
         }
 
-        # samples (cached per prev)
+        # ✅ rsm은 LightGBM에서도 feature_fraction으로 사용 가능 (GPU/CPU 모두 OK)
+        params["rsm"] = sample_from(rsm_vals, rs)
+
+        # samples cached per prev
         samples = load_samples_cache(N_FUTURE_ACTIONS, params["n_prev"])
         if samples is None:
             samples = make_event_based_samples(
@@ -743,15 +809,10 @@ def main():
             )
             save_samples_cache(samples, N_FUTURE_ACTIONS, params["n_prev"])
 
-        # CV eval
-        metrics = run_cv_eval(samples, params)
+        metrics = run_cv_eval(samples, params, outer_pbar=pbar, best_getter=best_str)
 
         rec = {"trial": t_idx, **params, **metrics}
-        trials.append(rec)
-
-        # ✅ trial 끝날 때마다 csv에 즉시 append
-        df_one = pd.DataFrame([rec])
-        df_one.to_csv(
+        pd.DataFrame([rec]).to_csv(
             csv_path,
             index=False,
             encoding="utf-8-sig",
@@ -760,7 +821,6 @@ def main():
         )
         csv_header_written = True
 
-        # update best (min brier)
         if metrics["brier"] < best["brier"]:
             best.update({
                 "trial": t_idx,
@@ -770,10 +830,9 @@ def main():
                 "metrics": dict(metrics),
             })
 
-        # tqdm postfix (only this line)
-        pbar.set_postfix_str(
-            f"best#{best['trial']} brier={best['brier']:.5f} nbs={best['nbs']:.5f} | {compact_params_str(best['params'])}"
-        )
+        pbar.set_postfix_str(best_str(), refresh=True)
+        with suppress(Exception):
+            pbar.refresh()
 
     out_best = {
         "best_trial": best["trial"],
@@ -786,6 +845,7 @@ def main():
             "N_FOLDS": N_FOLDS,
             "SEED": SEED,
             "N_ROUNDS": N_ROUNDS,
+            "LGBM_USE_GPU": bool(LGBM_USE_GPU),
         }
     }
     with open(os.path.join(OUT_DIR, "hpo_best.json"), "w", encoding="utf-8") as f:
