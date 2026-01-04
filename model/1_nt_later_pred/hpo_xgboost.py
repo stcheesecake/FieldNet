@@ -16,7 +16,42 @@ from tqdm import tqdm
 
 from sklearn.model_selection import GroupKFold
 from sklearn.metrics import roc_auc_score, log_loss, brier_score_loss
+import time
 
+class OneLineFoldProgress(xgb.callback.TrainingCallback):
+    """
+    XGBoost training progress -> update outer HPO tqdm postfix (single line).
+    """
+    def __init__(self, outer_pbar: tqdm, fold_idx: int, n_folds: int, total_rounds: int,
+                 best_getter, update_every: int = 25, min_sec: float = 0.4):
+        self.outer_pbar = outer_pbar
+        self.fold_idx = fold_idx
+        self.n_folds = n_folds
+        self.total_rounds = int(total_rounds)
+        self.best_getter = best_getter
+        self.update_every = int(update_every)
+        self.min_sec = float(min_sec)
+
+        self._last_iter = 0
+        self._last_time = 0.0
+
+    def after_iteration(self, model, epoch: int, evals_log) -> bool:
+        cur = epoch + 1  # 1-based
+        now = time.time()
+
+        # 너무 자주 갱신하면 느려짐 → step / time 둘 중 하나 만족할 때만 갱신
+        if (cur == 1) or (cur - self._last_iter >= self.update_every) or (now - self._last_time >= self.min_sec):
+            pct = 100.0 * cur / max(self.total_rounds, 1)
+            fold_str = f"Fold {self.fold_idx+1}/{self.n_folds}: {pct:>3.0f}% {cur}/{self.total_rounds}"
+            best_str = self.best_getter() if callable(self.best_getter) else ""
+            if best_str:
+                self.outer_pbar.set_postfix_str(f"{fold_str} | {best_str}")
+            else:
+                self.outer_pbar.set_postfix_str(f"{fold_str}")
+            self._last_iter = cur
+            self._last_time = now
+
+        return False
 
 # =========================================================
 # HPO CONFIG (YOU EDIT HERE)
@@ -522,7 +557,7 @@ def compact_params_str(p: dict):
 # =========================================================
 # CV EVAL (Brier 기준)
 # =========================================================
-def run_cv_eval(samples: pd.DataFrame, params: dict):
+def run_cv_eval(samples: pd.DataFrame, params: dict, outer_pbar=None, best_getter=None):
     # features
     base_drop = ["y", "game_id"]
     feature_df = samples.drop(columns=[c for c in base_drop if c in samples.columns], errors="ignore").copy()
@@ -572,13 +607,28 @@ def run_cv_eval(samples: pd.DataFrame, params: dict):
         dtr = xgb.DMatrix(Xtr, label=ytr, feature_names=X.columns.tolist())
         dva = xgb.DMatrix(Xva, label=yva, feature_names=X.columns.tolist())
 
+        callbacks = []
+        if outer_pbar is not None:
+            callbacks.append(
+                OneLineFoldProgress(
+                    outer_pbar=outer_pbar,
+                    fold_idx=fold,
+                    n_folds=N_FOLDS,
+                    total_rounds=num_boost_round,
+                    best_getter=best_getter,
+                    update_every=25,  # 필요시 50으로 올리면 더 조용해짐
+                    min_sec=0.4,
+                )
+            )
+
         bst = xgb.train(
             params=train_params,
             dtrain=dtr,
             num_boost_round=num_boost_round,
             evals=[(dva, "valid")],
             early_stopping_rounds=early_stop,
-            verbose_eval=False
+            verbose_eval=False,
+            callbacks=callbacks
         )
 
         best_iter = getattr(bst, "best_iteration", None)
@@ -663,6 +713,14 @@ def main():
 
     rs = np.random.RandomState(SEED)
 
+    def best_str():
+        if best["trial"] < 0 or best["params"] is None:
+            return "best#-"
+        return (
+            f"best#{best['trial']} brier={best['brier']:.5f} nbs={best['nbs']:.5f} | "
+            f"{compact_params_str(best['params'])}"
+        )
+
     best = {
         "trial": -1,
         "brier": float("inf"),
@@ -722,7 +780,7 @@ def main():
             save_samples_cache(samples, N_FUTURE_ACTIONS, params["n_prev"])
 
         # CV eval
-        metrics = run_cv_eval(samples, params)
+        metrics = run_cv_eval(samples, params, outer_pbar=pbar, best_getter=best_str)
 
         rec = {"trial": t_idx, **params, **metrics}
         trials.append(rec)
