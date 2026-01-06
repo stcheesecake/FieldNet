@@ -5,7 +5,7 @@ import pandas as pd
 # CONFIG
 # =========================
 IN_PATH = "merge.csv"
-OUT_PATH = "preprocess.csv"
+OUT_PATH = "data.csv"
 MAP_PATH = "preprocess_maps.json"
 
 # 인코딩에서 제외할 컬럼 리스트
