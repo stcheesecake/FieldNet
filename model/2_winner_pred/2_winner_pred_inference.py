@@ -6,14 +6,14 @@ import json
 import pickle
 import warnings
 from dataclasses import dataclass
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
 from sklearn.model_selection import GroupKFold
-from sklearn.metrics import log_loss, roc_auc_score
+from sklearn.metrics import roc_auc_score
 from scipy.stats import truncnorm, norm
 
 warnings.filterwarnings("ignore")
@@ -28,7 +28,9 @@ OUT_DIR = "../../../FiledNet_pkl_temp/results/results_bayes_winprob"
 N_FOLDS = 5
 SEED = 42
 
-MAX_MINUTE = 90
+# ---- Minute indexing for option B ----
+# half(전/후) 내 분을 그대로 쓰되, 너무 길어질 때 상한(안전장치)
+CAP_MINUTES_PER_HALF = 70   # 보통 50대면 충분, 넉넉히 70
 
 # Gibbs sampler
 N_ITER = 2500
@@ -40,34 +42,15 @@ BETA_VAR  = 50.0
 DELTA_VAR = 200.0**2
 EPS = 1e-6
 
-
 # =========================================================
 # Utils
 # =========================================================
 def ensure_dir(p: str):
     os.makedirs(p, exist_ok=True)
 
-def minute_from_period_time(period_id: int, time_seconds: float) -> int:
-    """
-    period_id=1/2, time_seconds=해당 period 내 초
-    1~45, 46~90으로 매핑
-    """
-    m_in_half = int(time_seconds // 60) + 1
-    m_in_half = min(45, max(1, m_in_half))
-    return m_in_half if period_id == 1 else 45 + m_in_half
-
-def minute_to_period_and_time(match_minute: int) -> tuple[int, float]:
-    """
-    분 단위 대표 time을 period 내 초로 생성
-    - 전반 1분 -> period=1, time=0
-    - 전반 45분 -> period=1, time=2640
-    - 후반 46분 -> period=2, time=0
-    - 후반 90분 -> period=2, time=2640
-    """
-    if match_minute <= 45:
-        return 1, float((match_minute - 1) * 60)
-    else:
-        return 2, float((match_minute - 46) * 60)
+def minute_in_half_from_time(time_seconds: float) -> int:
+    m = int(time_seconds // 60) + 1
+    return max(1, m)
 
 def safe_truncnorm_rvs(mean: float, sd: float, low: float, high: float) -> float:
     if not np.isfinite(low):
@@ -87,23 +70,13 @@ def safe_truncnorm_rvs(mean: float, sd: float, low: float, high: float) -> float
     return float(truncnorm.rvs(a=a, b=b, loc=mean, scale=sd))
 
 def multiclass_brier(y_true: np.ndarray, proba: np.ndarray, classes: List[int]) -> float:
-    """
-    Multiclass Brier: mean_i sum_c (p_ic - 1[y_i==c])^2
-    """
     Y = np.zeros_like(proba)
     for j, c in enumerate(classes):
         Y[:, j] = (y_true == c).astype(float)
     return float(np.mean(np.sum((proba - Y) ** 2, axis=1)))
 
 def nbs_from_brier(y_true: np.ndarray, proba: np.ndarray, classes: List[int]) -> float:
-    """
-    Normalized Brier Score (skill score):
-    NBS = 1 - (Brier_model / Brier_climatology)
-    climatology = class prevalence vector (constant forecast)
-    Brier_clim = 1 - sum_c p_c^2
-    """
     brier = multiclass_brier(y_true, proba, classes)
-    # prevalence
     ps = np.array([(y_true == c).mean() for c in classes], dtype=float)
     brier_clim = 1.0 - float(np.sum(ps ** 2))
     if brier_clim <= 0:
@@ -200,9 +173,10 @@ DIFF_COLS = [
 ]
 
 def add_time_and_sort(df: pd.DataFrame) -> pd.DataFrame:
-    df["match_minute"] = [
-        minute_from_period_time(p, t) for p, t in zip(df["period_id"].values, df["time_seconds"].values)
-    ]
+    # ✅ Option B time key: minute_in_half (period 내 분)
+    df["minute_in_half"] = [minute_in_half_from_time(t) for t in df["time_seconds"].values]
+
+    # 액션 정렬 (원래대로)
     df = df.sort_values(["game_id","period_id","time_seconds","team_id"], kind="mergesort").reset_index(drop=True)
     df["action_idx"] = df.groupby("game_id").cumcount()
     return df
@@ -222,23 +196,46 @@ def add_cumulative_counts(df: pd.DataFrame) -> pd.DataFrame:
 
     return df
 
-def build_minute_panel(df: pd.DataFrame) -> pd.DataFrame:
+def compute_max_minutes_per_half(df: pd.DataFrame, cap: int) -> Dict[int, int]:
     """
-    경기당 1~90분 패널 (각 분의 마지막 action 누적값, 없으면 ffill)
+    데이터에서 period별 minute_in_half 최대를 구하되, cap으로 상한.
     """
-    keep_cols = ["game_id","match_minute"] + DIFF_COLS
-    last_per_min = df.groupby(["game_id","match_minute"], as_index=False).tail(1)[keep_cols].copy()
+    max_by_period = df.groupby("period_id")["minute_in_half"].max().to_dict()
+    out = {}
+    for pid in [1, 2]:
+        m = int(max_by_period.get(pid, 45))
+        out[pid] = min(max(1, m), cap)
+    return out
+
+def build_minute_panel(df: pd.DataFrame, max_min_per_half: Dict[int, int]) -> pd.DataFrame:
+    """
+    ✅ Option B panel:
+    (game_id, period_id, minute_in_half)별 누적 diff의 마지막 action값을 사용.
+    해당 minute에 action이 없으면 이전 minute 누적값을 ffill.
+    """
+    keep_cols = ["game_id","period_id","minute_in_half"] + DIFF_COLS
+
+    # 각 (game, period, minute)에서 마지막 action의 누적값
+    last_per_min = (
+        df.groupby(["game_id","period_id","minute_in_half"], as_index=False)
+          .tail(1)[keep_cols]
+          .copy()
+    )
 
     panels = []
-    for gid, gdf in last_per_min.groupby("game_id"):
-        gdf = gdf.set_index("match_minute").sort_index()
-        gdf = gdf.reindex(range(1, MAX_MINUTE+1))
+    for (gid, pid), gdf in last_per_min.groupby(["game_id","period_id"]):
+        max_m = max_min_per_half.get(int(pid), 45)
+
+        gdf = gdf.set_index("minute_in_half").sort_index()
+        gdf = gdf.reindex(range(1, max_m + 1))
         gdf["game_id"] = gid
+        gdf["period_id"] = int(pid)
         gdf[DIFF_COLS] = gdf[DIFF_COLS].ffill().fillna(0)
-        gdf = gdf.reset_index().rename(columns={"index":"match_minute"})
+        gdf = gdf.reset_index().rename(columns={"index": "minute_in_half"})
         panels.append(gdf)
 
-    return pd.concat(panels, ignore_index=True)
+    panel = pd.concat(panels, ignore_index=True)
+    return panel
 
 def build_match_labels(df: pd.DataFrame) -> pd.DataFrame:
     ms = df.groupby("game_id")[["home_score","away_score"]].first().copy()
@@ -247,11 +244,7 @@ def build_match_labels(df: pd.DataFrame) -> pd.DataFrame:
     return ms.reset_index()
 
 def build_match_meta(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    경기 메타(팀명)를 game_id 기준으로 1개씩
-    """
-    m = df.groupby("game_id")[["home_team_name","away_team_name"]].first().reset_index()
-    return m
+    return df.groupby("game_id")[["home_team_name","away_team_name"]].first().reset_index()
 
 
 # =========================================================
@@ -263,10 +256,12 @@ class OrderedProbitParams:
     delta1_mean: float
     delta2_mean: float
 
-def fit_ordered_probit_gibbs(X: np.ndarray, y: np.ndarray,
-                             n_iter=N_ITER, burn=BURN, thin=THIN,
-                             beta_var=BETA_VAR, delta_var=DELTA_VAR,
-                             seed=SEED) -> OrderedProbitParams:
+def fit_ordered_probit_gibbs(
+    X: np.ndarray, y: np.ndarray,
+    n_iter=N_ITER, burn=BURN, thin=THIN,
+    beta_var=BETA_VAR, delta_var=DELTA_VAR,
+    seed=SEED
+) -> OrderedProbitParams:
     rng = np.random.default_rng(seed)
 
     n, p = X.shape
@@ -320,13 +315,15 @@ def fit_ordered_probit_gibbs(X: np.ndarray, y: np.ndarray,
             d2s.append(delta2)
 
     beta_mean = np.mean(np.stack(betas, axis=0), axis=0)
-    return OrderedProbitParams(beta_mean=beta_mean,
-                               delta1_mean=float(np.mean(d1s)),
-                               delta2_mean=float(np.mean(d2s)))
+    return OrderedProbitParams(
+        beta_mean=beta_mean,
+        delta1_mean=float(np.mean(d1s)),
+        delta2_mean=float(np.mean(d2s))
+    )
 
 def predict_proba_ordered_probit(X: np.ndarray, params: OrderedProbitParams) -> np.ndarray:
     """
-    proba columns order: [home_loss, draw, home_win] == classes [-1,0,1]
+    proba columns: [home_loss, draw, home_win] == classes [-1,0,1]
     """
     mu = X @ params.beta_mean
     d1, d2 = params.delta1_mean, params.delta2_mean
@@ -342,7 +339,7 @@ def predict_proba_ordered_probit(X: np.ndarray, params: OrderedProbitParams) -> 
 
 
 # =========================================================
-# Main: 5-fold GroupKFold OOF (MINUTE-level)
+# Main: 5-fold GroupKFold OOF (Option B: period+minute_in_half)
 # =========================================================
 def main():
     ensure_dir(OUT_DIR)
@@ -355,13 +352,17 @@ def main():
 
     # preprocess
     df = decode_type_result(df, inv_type)
-    df = add_time_and_sort(df)
+    df = add_time_and_sort(df)      # adds minute_in_half
     df = build_event_flags(df)
     df = add_cumulative_counts(df)
 
-    minute_panel = build_minute_panel(df)              # (game_id, minute) features
-    labels = build_match_labels(df)                    # (game_id, y)
-    meta = build_match_meta(df)                        # (game_id, team names)
+    # max minutes per half from data (capped)
+    max_min_per_half = compute_max_minutes_per_half(df, CAP_MINUTES_PER_HALF)
+    print("[Max minutes per half (capped)]", max_min_per_half)
+
+    minute_panel = build_minute_panel(df, max_min_per_half)  # (game, period, minute_in_half)
+    labels = build_match_labels(df)
+    meta = build_match_meta(df)
 
     panel = minute_panel.merge(labels[["game_id","y"]], on="game_id", how="left")
     panel["intercept"] = 1.0
@@ -370,9 +371,13 @@ def main():
     games = labels["game_id"].values
     gkf = GroupKFold(n_splits=N_FOLDS)
 
-    classes = [-1, 0, 1]  # home loss/draw/home win
+    classes = [-1, 0, 1]
     metrics_rows = []
-    oof_preds_all = []
+    oof_rows = []
+
+    # ✅ overall을 정확히 계산하기 위해 fold별 y/proba를 모아둠
+    all_y_true = []
+    all_proba = []
 
     for fold, (tr_idx, va_idx) in enumerate(gkf.split(games, groups=games), start=1):
         tr_games = set(games[tr_idx])
@@ -380,38 +385,53 @@ def main():
 
         print(f"\n[Fold {fold}] train_games={len(tr_games)} | val_games={len(va_games)}")
 
-        # ---- train 90 minute models ----
-        minute_models: Dict[int, OrderedProbitParams] = {}
+        # ---- Train models for each (period_id, minute_in_half) ----
+        models: Dict[Tuple[int, int], OrderedProbitParams] = {}
 
-        for t in tqdm(range(1, MAX_MINUTE + 1), desc=f"Fold {fold} | Fit minute models"):
-            tr_t = panel[(panel["match_minute"] == t) & (panel["game_id"].isin(tr_games))]
-            X = tr_t[FEATS].values.astype(float)
-            y = tr_t["y"].values.astype(int)
-            minute_models[t] = fit_ordered_probit_gibbs(X, y, seed=SEED + 1000*fold + t)
+        for pid in [1, 2]:
+            max_m = max_min_per_half.get(pid, 45)
+            for m in tqdm(range(1, max_m + 1), desc=f"Fold {fold} | Fit models (period={pid})"):
+                tr_t = panel[
+                    (panel["period_id"] == pid) &
+                    (panel["minute_in_half"] == m) &
+                    (panel["game_id"].isin(tr_games))
+                ]
+                X = tr_t[FEATS].values.astype(float)
+                y = tr_t["y"].values.astype(int)
 
-        # ---- val prediction on MINUTE panel (90 rows per match) ----
+                # 안전: 혹시 특정 분에 샘플이 너무 적으면 (극단 상황) 스킵/백오프
+                if len(tr_t) < 10:
+                    # 이전 분 모델이 있으면 그걸 그대로 사용(학습 안정 목적)
+                    if (pid, m - 1) in models:
+                        models[(pid, m)] = models[(pid, m - 1)]
+                        continue
+
+                models[(pid, m)] = fit_ordered_probit_gibbs(X, y, seed=SEED + 1000*fold + pid*100 + m)
+
+        # ---- Validation prediction on minute_panel ----
         va_panel = minute_panel[minute_panel["game_id"].isin(va_games)].copy().reset_index(drop=True)
         va_panel["intercept"] = 1.0
         X_min = va_panel[["intercept"] + DIFF_COLS].values.astype(float)
 
         proba = np.zeros((len(va_panel), 3), dtype=float)
-        for t, sub in va_panel.groupby("match_minute", sort=False):
+
+        # group by (period, minute_in_half)
+        for (pid, m), sub in va_panel.groupby(["period_id","minute_in_half"], sort=False):
             idxs = sub.index.to_numpy()
-            params = minute_models.get(int(t), minute_models[MAX_MINUTE])
+            pid = int(pid); m = int(m)
+            max_m = max_min_per_half.get(pid, 45)
+            key = (pid, m) if (pid, m) in models else (pid, max_m)  # cap 넘어가면 마지막 모델
+            params = models[key]
             proba[idxs, :] = predict_proba_ordered_probit(X_min[idxs], params)
 
-        # y_true (match label repeated over minutes)
+        # y_true = match label repeated over rows
         y_map = labels.set_index("game_id")["y"].to_dict()
         y_true = va_panel["game_id"].map(y_map).values.astype(int)
 
-        # ---- metrics (fold) ----
-        # Brier / NBS
+        # ---- Metrics (fold) ----
         brier = multiclass_brier(y_true, proba, classes)
         nbs = nbs_from_brier(y_true, proba, classes)
 
-        # AUC (multiclass OvR macro)
-        # sklearn expects classes 0..C-1 for y, but roc_auc_score can take original labels with proper "labels=" in newer versions.
-        # safest: remap
         y_remap = np.array([classes.index(v) for v in y_true], dtype=int)
         auc = roc_auc_score(y_remap, proba, multi_class="ovr", average="macro")
 
@@ -426,59 +446,47 @@ def main():
 
         print(f"[Fold {fold}] Brier={brier:.6f} | NBS={nbs:.6f} | AUC(ovr,macro)={auc:.6f}")
 
-        # ---- fold OOF rows -> keep for final concat ----
-        out = va_panel[["game_id","match_minute"]].copy()
+        # overall pool
+        all_y_true.append(y_true)
+        all_proba.append(proba)
+
+        # ---- OOF output rows (requested columns) ----
+        out = va_panel[["game_id","period_id","minute_in_half"]].copy()
         out = out.merge(meta, on="game_id", how="left")
 
-        # period_id & time (period 내 초)
-        period_time = np.array([minute_to_period_and_time(int(m)) for m in out["match_minute"].values], dtype=object)
-        out["period_id"] = period_time[:, 0].astype(int)
-        out["time"] = period_time[:, 1].astype(float)
+        # time = period 내 대표 초 (minute 시작 기준)
+        out["time"] = (out["minute_in_half"].astype(int) - 1) * 60.0
 
-        # requested preds
         out["home_pred"] = proba[:, 2]  # P(home win)
-        out["away_pred"] = proba[:, 0]  # P(away win) = P(home loss)
+        out["away_pred"] = proba[:, 0]  # P(away win)
 
-        # keep exactly requested columns
         out = out[[
             "game_id","period_id","time",
             "home_pred","away_pred",
             "home_team_name","away_team_name"
         ]]
+        oof_rows.append(out)
 
-        oof_preds_all.append(out)
-
-    # ---- overall metrics from concatenated OOF ----
+    # ---- Save outputs ----
     metrics_df = pd.DataFrame(metrics_rows)
-
-    # For overall, we need y_true/proba across all folds.
-    # Reconstruct overall by reloading oof (home_pred/away_pred) doesn't include draw,
-    # so recompute overall from per-fold stored arrays would be complex.
-    # Instead: compute overall metrics by aggregating fold metrics weighted by rows? (approx)
-    # Better: recompute overall exactly using stored minute_panel predictions not kept.
-    # We'll do exact recompute by re-running prediction assembly from saved oof folds is not possible without draw.
-    # So we compute overall exactly by concatenating per-fold proba stored in-memory during run.
-    # -> We'll store them during loop.
-
-    # To compute exact overall, store y_true/proba each fold during loop
-    # (Implemented here by re-looping not possible; so we change: keep lists in memory.)
-    # For simplicity in this script: compute "overall" as weighted by val_rows_minutes.
-    w = metrics_df["val_rows_minutes"].values.astype(float)
-    overall_brier = float(np.average(metrics_df["brier"].values, weights=w))
-    overall_nbs = float(np.average(metrics_df["nbs"].values, weights=w))
-    overall_auc = float(np.average(metrics_df["auc_ovr_macro"].values, weights=w))
-
-    # save one CSV with all minutes for all games
-    oof_all = pd.concat(oof_preds_all, ignore_index=True)
-    oof_path = os.path.join(OUT_DIR, "oof_all_minutes.csv")
-    oof_all.to_csv(oof_path, index=False)
-
-    # save metrics
-    metrics_path = os.path.join(OUT_DIR, "cv_metrics_minutes.csv")
+    metrics_path = os.path.join(OUT_DIR, "cv_metrics_minutes_ext.csv")
     metrics_df.to_csv(metrics_path, index=False)
 
+    oof_all = pd.concat(oof_rows, ignore_index=True)
+    oof_path = os.path.join(OUT_DIR, "oof_all_minutes_ext.csv")
+    oof_all.to_csv(oof_path, index=False)
+
+    # ---- Overall (exact) metrics ----
+    y_all = np.concatenate(all_y_true, axis=0)
+    proba_all = np.concatenate(all_proba, axis=0)
+
+    overall_brier = multiclass_brier(y_all, proba_all, classes)
+    overall_nbs = nbs_from_brier(y_all, proba_all, classes)
+    y_all_remap = np.array([classes.index(v) for v in y_all], dtype=int)
+    overall_auc = roc_auc_score(y_all_remap, proba_all, multi_class="ovr", average="macro")
+
     print("\n====================")
-    print("[Overall (weighted)]")
+    print("[Overall (exact OOF)]")
     print(f"Brier={overall_brier:.6f} | NBS={overall_nbs:.6f} | AUC(ovr,macro)={overall_auc:.6f}")
     print("====================")
     print("Saved:", oof_path)
