@@ -1,1163 +1,490 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-Real-time (action-step) match outcome forecasting
-- Sliding window: USER 방식(직전 N분 / 최근 K액션)으로 "입력"을 만든다.
-- Model 이후: 논문(Ordered Probit + Bayesian + time-varying 이벤트 효과) 방식으로 설계한다.
-- HPO: 첨부한 hpo_catboost.py 스타일(랜덤서치 + GroupKFold + trial별 CSV 저장)을 따른다.
-
-논문 핵심(구현 반영):
-- 결과 y ∈ {-1,0,1} (home perspective: loss/draw/win)
-- latent Π = Xβ + ε, ε ~ N(0,1)
-- cutoffs δ1 < δ2 로 y 매핑(ordered probit)
-- 이벤트 타입별 "분(minute)별 카운트"를 covariate로 사용
-- time-varying effect: 이벤트 타입 k의 계수는 minute index(1..90)에 따라 달라질 수 있게
-  (여기서는 '분별 계수 벡터'에 AR(1) 형태(ρ^{|i-j|}) prior를 둬서
-   시간 상관(지수감쇠) 구조를 논문처럼 반영)
-
-사용자 요구(반영):
-- 입력은 "슬라이딩 윈도우"로만 제어(직전 N분 또는 최근 K액션)
-- 예측은 액션마다(실시간) 가능하도록, 현재 minute t에서 window를 업데이트해 feature를 만든다.
-  (학습 데이터는 논문처럼 '매 분 스냅샷'으로 기본 구성. 필요 시 action-snapshot도 가능)
-
-⚠️ 데이터 컬럼이 프로젝트마다 다르므로,
-    아래 CONFIG의 COL_* 매핑만 맞추면 돌아가게 "강건하게" 작성함.
-"""
 
 import os
 import json
-import math
-import random
+import pickle
 import warnings
-from contextlib import suppress
-from datetime import datetime
+from dataclasses import dataclass
+from typing import Dict, Tuple, List
 
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
 from sklearn.model_selection import GroupKFold
-from sklearn.metrics import log_loss as sk_logloss
-from sklearn.metrics import roc_auc_score
+from sklearn.metrics import log_loss
 
-from scipy.stats import norm
+from scipy.stats import truncnorm, norm
 
 warnings.filterwarnings("ignore")
 
-
 # =========================================================
-# CONFIG (YOU EDIT HERE)
+# CONFIG
 # =========================================================
-DATA_PATH = "../../data/train.csv"   # ✅ action log CSV
-OUT_DIR   = "../../../FiledNet_pkl_temp/hpo_results/bayesian"
-CACHE_DIR = "./cache_bayes_outcome"
+TRAIN_CSV = "../../data/train.csv"
+MAP_JSON  = "../../data/preprocess_maps.json"
 
-MAX_MINUTE = 90                 # 논문: Γ={1..90}
+OUT_DIR = "../../../FiledNet_pkl_temp/results/results_bayes_winprob"
 N_FOLDS = 3
 SEED = 42
 
-# HPO trials
-N_ROUNDS = 50                   # 원하면 100으로(시간/자원 고려)
+# time grid (논문은 1~90분 = 90개 모델)
+MAX_MINUTE = 90
 
-# -------- Sliding Window (HPO 대상) --------
-WINDOW_MODE_R = ["ACTIONS"]  # 직전 N분 or 최근 K액션
-WINDOW_MIN_R  = [3, 10, 1]              # MINUTES 모드일 때 직전 N분
-WINDOW_ACT_R  = [50, 200, 25]           # ACTIONS 모드일 때 최근 K액션
+# Gibbs sampler
+N_ITER = 2500
+BURN   = 1200
+THIN   = 5
 
-# -------- Event types (논문 구조) --------
-# 논문 스타일: event counts by type (Shot/Cross/Foul 등)
-# 네 데이터에 따라 type_name이 다르면 여기 리스트만 조정하면 됨.
-EVENT_TYPES_CANDIDATES = [
-    ["Shot", "Cross", "Foul", "Pass"],                 # 가벼움(추천)
-    ["Shot", "Cross", "Foul", "Pass", "Duel"],
-    ["Shot", "Cross", "Foul", "Pass", "Duel", "Tackle"],
-]
+# priors
+BETA_VAR = 50.0     # beta ~ N(0, BETA_VAR * I)
+DELTA_VAR = 200.0**2  # delta_j ~ N(0, DELTA_VAR) (논문도 큰 값으로 둠)
 
-# -------- Bayesian / Gibbs (HPO 대상) --------
-# AR(1) prior correlation rho in (0,1): rho^{|i-j|} ~ exp(-ω|i-j|)
-RHO_R         = [0.70, 0.98, 0.04]      # 0.70~0.98
-SIGMA_BETA_R  = [0.5, 3.0, 0.5]         # 이벤트계수 prior scale
-SIGMA_GAMMA_R = [0.5, 3.0, 0.5]         # 정적 covariate prior scale
-
-GIBBS_ITERS_R = [120, 300, 30]          # Gibbs iterations
-BURN_IN_FRAC  = 0.5
-THINNING      = 5                       # 5면 5스텝마다 1개 보관
-
-# -------- Snapshots --------
-# 논문은 "매 분 끝"에서 covariate 기록.
-# 실시간 액션 예측은 동일 feature를 action마다 갱신해서 사용 가능.
-TRAIN_SNAPSHOT_MODE = "END_OF_MINUTE"   # ["END_OF_MINUTE", "ALL_ACTIONS"]
-
-
-# -------- Column mapping (데이터에 맞게 수정) --------
-# 필수
-COL_GAME   = "game_id"
-COL_TEAM   = "team_id"
-COL_PERIOD = "period_id"          # 없으면 None으로 두고 아래 match_time_seconds에서 처리
-COL_TIME   = "time_seconds"
-
-# home/away 정보(있으면 가장 좋음)
-COL_HOME_TEAM = "home_team_id"    # 없으면 None
-COL_AWAY_TEAM = "away_team_id"    # 없으면 None
-
-# 이벤트 타입
-# (1) type_name 컬럼이 있으면 그걸 사용
-COL_TYPE_NAME   = "type_name"     # 없으면 None
-# (2) 없으면 type_result 같은 "Shot__Goal" 형태에서 type/result 파싱
-COL_TYPE_RESULT = "type_result"   # 없으면 None
-
-# 골 판정(가능하면 result_name / code 기반)
-COL_RESULT_NAME = "result_name"   # 없으면 None
-
-# 최종 결과 라벨
-# (A) 최종 스코어 컬럼이 있으면 사용
-COL_HOME_SCORE_FT = "home_score"  # 없으면 None
-COL_AWAY_SCORE_FT = "away_score"  # 없으면 None
-# (B) 없으면 match-level result 컬럼(예: "H","D","A")가 있으면 매핑
-COL_MATCH_RESULT  = None          # 예: "match_result"  (없으면 None)
-
-# 좌표/instant raw feature를 논문 구조에 "추가 covariate"로 넣고 싶으면 True
-# (정확히 논문만 하려면 False)
-USE_INSTANT_RAW = False
-COL_START_X = "start_x"
-COL_START_Y = "start_y"
-COL_END_X   = "end_x"
-COL_END_Y   = "end_y"
-
+EPS = 1e-6
 
 # =========================================================
-# Utils
+# Utilities
 # =========================================================
 def ensure_dir(p: str):
     os.makedirs(p, exist_ok=True)
 
-
-def set_all_seeds(seed: int):
-    random.seed(seed)
-    np.random.seed(seed)
-
-
-def build_values(rng, as_int=False):
-    a, b, s = rng
-    vals = []
-    x = a
-    while x <= b + 1e-12:
-        vals.append(int(x) if as_int else float(x))
-        x += s
-    return vals
-
-
-def match_time_seconds(period_id, time_seconds):
-    # period_id가 없으면 그냥 time_seconds 사용
-    if period_id is None or (isinstance(period_id, float) and np.isnan(period_id)):
-        return int(float(time_seconds))
-    return int(float(time_seconds) + max(int(period_id) - 1, 0) * 45 * 60)
-
-
-def parse_type_result(s: str):
-    # "Shot__Goal" -> ("Shot","Goal")
-    s = str(s)
-    if "__" in s:
-        a, b = s.split("__", 1)
-        return a.strip(), b.strip()
-    return s.strip(), ""
-
-
-def infer_teams_by_game(df: pd.DataFrame):
-    # 1) home/away 컬럼 있으면 사용
-    if COL_HOME_TEAM and COL_AWAY_TEAM and (COL_HOME_TEAM in df.columns) and (COL_AWAY_TEAM in df.columns):
-        g = df.groupby(COL_GAME)[[COL_HOME_TEAM, COL_AWAY_TEAM]].first()
-        teams = {}
-        for row in g.itertuples():
-            gid = int(row.Index)
-            teams[gid] = (int(getattr(row, COL_HOME_TEAM)), int(getattr(row, COL_AWAY_TEAM)))
-        return teams
-
-    # 2) 없으면 game_id 내 team_id unique 2개로 추정 (정렬)
-    tmp = df.groupby(COL_GAME)[COL_TEAM].unique().to_dict()
-    teams = {}
-    for gid, arr in tmp.items():
-        arr = list(arr)
-        if len(arr) < 2:
-            continue
-        arr_sorted = sorted([int(x) for x in arr])
-        teams[int(gid)] = (arr_sorted[0], arr_sorted[1])  # ⚠️ home/away가 실제와 다를 수 있음
-    return teams
-
-
-def build_outcome_labels_by_game(df: pd.DataFrame, teams_by_game: dict):
+def minute_from_period_time(period_id: int, time_seconds: float) -> int:
     """
-    y ∈ {-1,0,1} from home perspective:
-      -1: home loss, 0: draw, 1: home win
-    우선순위:
-      (1) home_score/away_score FT 컬럼이 있으면 사용
-      (2) match_result(예: H/D/A) 있으면 사용
-      (3) 없으면 goal 이벤트 누적으로 FT 스코어를 계산(골 판정 로직 필요)
+    train.csv에서:
+    - period_id: 1(전),2(후)
+    - time_seconds: 각 period 시작 후 경과초 (0~3600+)
+    논문처럼 stoppage를 45/90분에 몰아넣는 방식으로 매핑.
     """
-    y_by_game = {}
+    m_in_half = int(time_seconds // 60) + 1
+    m_in_half = min(45, max(1, m_in_half))
+    if period_id == 1:
+        return m_in_half
+    else:
+        return 45 + m_in_half
 
-    # (1) FT score
-    if (COL_HOME_SCORE_FT in df.columns) and (COL_AWAY_SCORE_FT in df.columns):
-        g = df.groupby(COL_GAME)[[COL_HOME_SCORE_FT, COL_AWAY_SCORE_FT]].first()
-        for row in g.itertuples():
-            gid = int(row.Index)
-            hs = float(getattr(row, COL_HOME_SCORE_FT))
-            as_ = float(getattr(row, COL_AWAY_SCORE_FT))
-            if hs > as_:
-                y_by_game[gid] = 1
-            elif hs < as_:
-                y_by_game[gid] = -1
-            else:
-                y_by_game[gid] = 0
-        return y_by_game
-
-    # (2) match_result like H/D/A
-    if (COL_MATCH_RESULT is not None) and (COL_MATCH_RESULT in df.columns):
-        g = df.groupby(COL_GAME)[COL_MATCH_RESULT].first()
-        for gid, r in g.items():
-            gid = int(gid)
-            r = str(r).upper().strip()
-            if r in ["H", "HOME", "1", "W"]:
-                y_by_game[gid] = 1
-            elif r in ["A", "AWAY", "2", "L"]:
-                y_by_game[gid] = -1
-            else:
-                y_by_game[gid] = 0
-        return y_by_game
-
-    # (3) fallback: goal event 누적 (데이터에 맞게 보완 필요)
-    # 여기서는 result_name == "Goal" 또는 type_result의 suffix == "Goal"이면 골로 간주
-    tmp = {}
-    for gid, gdf in df.groupby(COL_GAME):
-        gid = int(gid)
-        home, away = teams_by_game.get(gid, (None, None))
-        if home is None:
-            continue
-
-        gh = 0
-        ga = 0
-        for r in gdf.itertuples(index=False):
-            tid = int(getattr(r, COL_TEAM))
-            # event type/result
-            if COL_TYPE_NAME and (COL_TYPE_NAME in df.columns):
-                tn = str(getattr(r, COL_TYPE_NAME))
-                rn = str(getattr(r, COL_RESULT_NAME)) if (COL_RESULT_NAME and COL_RESULT_NAME in df.columns) else ""
-            elif COL_TYPE_RESULT and (COL_TYPE_RESULT in df.columns):
-                tn, rn = parse_type_result(getattr(r, COL_TYPE_RESULT))
-            else:
-                continue
-
-            is_goal = False
-            if rn.lower() == "goal":
-                is_goal = True
-            if isinstance(rn, str) and rn.endswith("Goal"):
-                is_goal = True
-            if isinstance(tn, str) and tn.lower() == "goal":
-                is_goal = True
-
-            if is_goal:
-                if tid == home:
-                    gh += 1
-                elif tid == away:
-                    ga += 1
-
-        if gh > ga:
-            tmp[gid] = 1
-        elif gh < ga:
-            tmp[gid] = -1
-        else:
-            tmp[gid] = 0
-
-    return tmp
-
-
-def compute_team_strength_points(y_by_game: dict, teams_by_game: dict):
+def safe_truncnorm_rvs(mean: float, sd: float, low: float, high: float) -> float:
     """
-    간단 team strength: 승=3, 무=1, 패=0 (home/away 모두 동일하게 반영)
-    fold leakage 방지 위해 fold별로 train subset에서 계산해서 사용.
+    low/high가 무한대여도 truncnorm이 처리 가능.
+    low >= high면 fallback으로 clip(mean)을 반환.
     """
-    pts = {}
-    games = 0
+    if not np.isfinite(low):
+        a = -np.inf
+    else:
+        a = (low - mean) / sd
+    if not np.isfinite(high):
+        b = np.inf
+    else:
+        b = (high - mean) / sd
 
-    for gid, y in y_by_game.items():
-        if gid not in teams_by_game:
-            continue
-        home, away = teams_by_game[gid]
-        # home perspective y
-        if y == 1:
-            ph, pa = 3, 0
-        elif y == -1:
-            ph, pa = 0, 3
-        else:
-            ph, pa = 1, 1
+    if (np.isfinite(a) and np.isfinite(b) and a >= b) or (low >= high):
+        return float(np.clip(mean, low + EPS, high - EPS)) if np.isfinite(low) and np.isfinite(high) else float(mean)
 
-        pts[home] = pts.get(home, 0) + ph
-        pts[away] = pts.get(away, 0) + pa
-        games += 1
+    return float(truncnorm.rvs(a=a, b=b, loc=mean, scale=sd))
 
-    # normalize by matches played
-    cnt = {}
-    for gid, y in y_by_game.items():
-        if gid not in teams_by_game:
-            continue
-        home, away = teams_by_game[gid]
-        cnt[home] = cnt.get(home, 0) + 1
-        cnt[away] = cnt.get(away, 0) + 1
-
-    strength = {}
-    for team, p in pts.items():
-        strength[team] = p / max(cnt.get(team, 1), 1)
-
-    return strength
-
+def multiclass_brier(y_true: np.ndarray, proba: np.ndarray, classes: List[int]) -> float:
+    """
+    Multiclass Brier score: mean_i sum_c (p_ic - 1[y_i==c])^2
+    y_true: shape (n,)
+    proba: shape (n, C)
+    classes: list of class labels aligned with proba columns
+    """
+    n = len(y_true)
+    Y = np.zeros_like(proba)
+    for j, c in enumerate(classes):
+        Y[:, j] = (y_true == c).astype(float)
+    return float(np.mean(np.sum((proba - Y) ** 2, axis=1)))
 
 # =========================================================
-# Feature precompute (minute-level event counts)
+# Event mapping (논문 8개 이벤트 카테고리로 압축)
 # =========================================================
-def preprocess_actions(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
+def decode_type_result(df: pd.DataFrame, inv_map: Dict[int, str]) -> pd.DataFrame:
+    s = df["type_result"].map(inv_map)
+    # type_name, result_name 분리 (맨 마지막 "__" 기준)
+    tmp = s.str.rsplit("__", n=1, expand=True)
+    df["type_name"] = tmp[0]
+    df["result_name"] = tmp[1].fillna("NA")
+    return df
 
-    # match time seconds
-    if (COL_PERIOD is None) or (COL_PERIOD not in df.columns):
-        df["_tsec"] = df[COL_TIME].astype(float).map(lambda x: match_time_seconds(None, x))
-    else:
-        df["_tsec"] = df.apply(lambda r: match_time_seconds(r[COL_PERIOD], r[COL_TIME]), axis=1)
+def build_event_flags(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    논문 이벤트:
+    Goal, Shot-on, Shot-off, Red card, Yellow card, Corner, Cross, Foul
+    -> 홈/원정 각각 카운트가 필요하니, 각 row를 H/A로 credit해서 0/1 플래그 생성
+    """
+    # side: action 수행 팀이 홈팀인가?
+    df["is_home_action"] = (df["team_id"] == df["home_team_id"]).astype(np.int8)
 
-    # minute index 1..MAX_MINUTE (cap)
-    df["_minute"] = (df["_tsec"] // 60 + 1).astype(int)
-    df["_minute"] = df["_minute"].clip(1, MAX_MINUTE)
+    # 기본 side(H/A) one-hot
+    df["H_side"] = df["is_home_action"]
+    df["A_side"] = (1 - df["is_home_action"]).astype(np.int8)
 
-    # type_name / result_name
-    if (COL_TYPE_NAME is not None) and (COL_TYPE_NAME in df.columns):
-        df["_type_name"] = df[COL_TYPE_NAME].astype(str)
-        if (COL_RESULT_NAME is not None) and (COL_RESULT_NAME in df.columns):
-            df["_result_name"] = df[COL_RESULT_NAME].astype(str)
+    tn = df["type_name"].astype(str)
+    rn = df["result_name"].astype(str)
+
+    # ---- Goal: Goal 자체 + Shot/FreeKick/Penalty goal + Own Goal ----
+    is_goal = (tn == "Goal") | ((tn.isin(["Shot", "Shot_Freekick", "Penalty Kick"])) & (rn == "Goal"))
+    is_own_goal = (tn == "Own Goal")
+
+    # ---- Shots (on/off) ----
+    is_shot_on = (tn.isin(["Shot", "Shot_Freekick", "Penalty Kick"])) & (rn.isin(["On Target", "Keeper Rush-Out"]))
+    is_shot_off = (
+        (tn.isin(["Shot", "Shot_Freekick", "Penalty Kick"])) &
+        (rn.isin(["Off Target", "Blocked", "Low Quality Shot"]))
+    ) | (tn.isin(["Goal Miss", "Goal Post"]))
+
+    # ---- Cards ----
+    is_red = tn.isin(["Foul", "Handball_Foul"]) & rn.isin(["Direct_Red_Card", "Second_Yellow_Card"])
+    is_yellow = tn.isin(["Foul", "Handball_Foul"]) & (rn == "Yellow_Card")
+
+    # ---- Corner / Cross / Foul ----
+    is_corner = (tn == "Pass_Corner")
+    is_cross  = (tn == "Cross")
+    is_foul   = tn.isin(["Foul", "Handball_Foul", "Foul_Throw"])
+
+    # credit side:
+    # - 일반 이벤트: action team side로 credit
+    # - own goal: 반대편에 goal credit (상대에게 득점이니까)
+    H = df["H_side"].values.astype(np.int8)
+    A = df["A_side"].values.astype(np.int8)
+
+    # init columns
+    for ev in ["goal", "shot_on", "shot_off", "red", "yellow", "corner", "cross", "foul"]:
+        df[f"H_{ev}"] = 0
+        df[f"A_{ev}"] = 0
+
+    # helper to set
+    def set_side(ev_mask: np.ndarray, colH: str, colA: str, flip: bool = False):
+        if not flip:
+            df.loc[ev_mask, colH] = H[ev_mask]
+            df.loc[ev_mask, colA] = A[ev_mask]
         else:
-            df["_result_name"] = ""
-    elif (COL_TYPE_RESULT is not None) and (COL_TYPE_RESULT in df.columns):
-        tmp = df[COL_TYPE_RESULT].astype(str).map(parse_type_result)
-        df["_type_name"] = tmp.map(lambda x: x[0])
-        df["_result_name"] = tmp.map(lambda x: x[1])
-    else:
-        raise ValueError("Need either type_name or type_result column. Check CONFIG COL_TYPE_NAME/COL_TYPE_RESULT.")
+            # flip: own goal
+            df.loc[ev_mask, colH] = A[ev_mask]
+            df.loc[ev_mask, colA] = H[ev_mask]
 
-    # instant raw
-    if USE_INSTANT_RAW:
-        for c in [COL_START_X, COL_START_Y, COL_END_X, COL_END_Y]:
-            if c not in df.columns:
-                df[c] = np.nan
+    set_side(is_goal.values,     "H_goal",     "A_goal",     flip=False)
+    set_side(is_own_goal.values, "H_goal",     "A_goal",     flip=True)
 
-        df["_dx"] = (df[COL_END_X].astype(float) - df[COL_START_X].astype(float)).fillna(0.0)
-        df["_dy"] = (df[COL_END_Y].astype(float) - df[COL_START_Y].astype(float)).fillna(0.0)
+    set_side(is_shot_on.values,  "H_shot_on",  "A_shot_on",  flip=False)
+    set_side(is_shot_off.values, "H_shot_off", "A_shot_off", flip=False)
+    set_side(is_red.values,      "H_red",      "A_red",      flip=False)
+    set_side(is_yellow.values,   "H_yellow",   "A_yellow",   flip=False)
+    set_side(is_corner.values,   "H_corner",   "A_corner",   flip=False)
+    set_side(is_cross.values,    "H_cross",    "A_cross",    flip=False)
+    set_side(is_foul.values,     "H_foul",     "A_foul",     flip=False)
 
     return df
 
-
-def build_minute_event_counts(df: pd.DataFrame, teams_by_game: dict, event_types: list):
-    """
-    base_counts[gid] = {
-        "home": home_id, "away": away_id,
-        "counts_home": (MAX_MINUTE, K) int,
-        "counts_away": (MAX_MINUTE, K) int,
-        "raw_last_row_idx_by_minute": (MAX_MINUTE,) -> end-of-minute snapshot index (optional)
-    }
-    """
-    K = len(event_types)
-    et2i = {e: i for i, e in enumerate(event_types)}
-
-    base = {}
-    for gid, gdf in df.groupby(COL_GAME):
-        gid = int(gid)
-        if gid not in teams_by_game:
-            continue
-        home, away = teams_by_game[gid]
-        ch = np.zeros((MAX_MINUTE, K), dtype=np.int32)
-        ca = np.zeros((MAX_MINUTE, K), dtype=np.int32)
-
-        # end-of-minute snapshot row index (last action index within that minute)
-        last_idx = np.full((MAX_MINUTE,), -1, dtype=np.int32)
-
-        # sort by time
-        gdf2 = gdf.sort_values("_tsec")
-        for idx, r in enumerate(gdf2.itertuples(index=False)):
-            tid = int(getattr(r, COL_TEAM))
-            m = int(getattr(r, "_minute")) - 1
-            tn = str(getattr(r, "_type_name"))
-
-            if tn in et2i:
-                j = et2i[tn]
-                if tid == home:
-                    ch[m, j] += 1
-                elif tid == away:
-                    ca[m, j] += 1
-
-            last_idx[m] = idx  # 마지막 갱신
-
-        base[gid] = dict(
-            home=home, away=away,
-            counts_home=ch, counts_away=ca,
-            last_idx_by_minute=last_idx,
-            gdf_sorted=gdf2.reset_index(drop=True) if USE_INSTANT_RAW else None
-        )
-
-    return base
-
-
-def build_snapshot_table(df: pd.DataFrame,
-                         teams_by_game: dict,
-                         y_by_game: dict,
-                         event_types: list,
-                         window_mode: str,
-                         window_min: int,
-                         window_actions: int):
-    """
-    학습/평가용 snapshot 생성
-    - 기본: match x minute (1..90) (논문 방식)
-    - window_mode:
-        * MINUTES : 직전 window_min분만 남기고 나머지 minutes의 feature는 0 처리
-        * ACTIONS : 최근 window_actions 액션만 카운트 → minute별로 분해해 feature에 적재
-    """
-    dfp = preprocess_actions(df)
-
-    base = build_minute_event_counts(dfp, teams_by_game, event_types)
-    K = len(event_types)
-
-    rows = []
-    for gid, info in base.items():
-        if gid not in y_by_game:
-            continue
-        y = int(y_by_game[gid])
-        home, away = info["home"], info["away"]
-
-        # 필요 시 action window를 위해 actions list
-        gdf_sorted = info["gdf_sorted"] if USE_INSTANT_RAW else None
-        gactions = None
-        if window_mode == "ACTIONS":
-            gactions = dfp[dfp[COL_GAME] == gid].sort_values("_tsec").reset_index(drop=True)
-
-        for t in range(1, MAX_MINUTE + 1):
-            # progress(0~1) - 사용자 요구(시간 정규화)
-            prog = float(t) / float(MAX_MINUTE)
-
-            # event counts per minute (window 적용)
-            xh = np.zeros((MAX_MINUTE, K), dtype=np.float32)
-            xa = np.zeros((MAX_MINUTE, K), dtype=np.float32)
-
-            if window_mode == "MINUTES":
-                start = max(1, t - window_min + 1)
-                # base minute counts는 (0..89)
-                xh[start-1:t, :] = info["counts_home"][start-1:t, :]
-                xa[start-1:t, :] = info["counts_away"][start-1:t, :]
-
-            else:  # ACTIONS
-                # t분(초)까지의 액션 중 최근 K개만
-                tsec_cut = t * 60
-                sub = gactions[gactions["_tsec"] <= tsec_cut]
-                if len(sub) > 0:
-                    sub2 = sub.iloc[max(0, len(sub) - window_actions):]
-                    # minute별로 다시 카운트
-                    for r in sub2.itertuples(index=False):
-                        m = int(getattr(r, "_minute")) - 1
-                        tn = str(getattr(r, "_type_name"))
-                        tid = int(getattr(r, COL_TEAM))
-                        if tn in event_types:
-                            j = event_types.index(tn)
-                            if tid == home:
-                                xh[m, j] += 1
-                            elif tid == away:
-                                xa[m, j] += 1
-
-            # feature vector 구성(논문 구조):
-            # z: [1, strength_diff, progress]  (strength_diff는 fold별로 채움 → 여기서는 team id만 저장)
-            # time-varying: for each event type k, minute 1..90의 home/away count를 flatten
-            feat_counts = np.concatenate([xh.reshape(-1), xa.reshape(-1)], axis=0).astype(np.float32)
-
-            row = {
-                "game_id": gid,
-                "minute": t,
-                "home_team_id": home,
-                "away_team_id": away,
-                "y": y,
-                "progress": prog,
-            }
-
-            # counts를 벡터로 저장 (메모리 절약 위해 np.ndarray 그대로)
-            row["feat_counts"] = feat_counts
-
-            # (옵션) instant raw를 "현재 minute 끝 action" 기준으로 추가
-            if USE_INSTANT_RAW and TRAIN_SNAPSHOT_MODE == "END_OF_MINUTE":
-                li = info["last_idx_by_minute"][t-1]
-                if li >= 0:
-                    rr = info["gdf_sorted"].iloc[int(li)]
-                    sx, sy = float(rr.get(COL_START_X, np.nan)), float(rr.get(COL_START_Y, np.nan))
-                    ex, ey = float(rr.get(COL_END_X, np.nan)), float(rr.get(COL_END_Y, np.nan))
-                    dx, dy = float(rr.get("_dx", 0.0)), float(rr.get("_dy", 0.0))
-                else:
-                    sx = sy = ex = ey = np.nan
-                    dx = dy = 0.0
-                row.update({"sx": sx, "sy": sy, "ex": ex, "ey": ey, "dx": dx, "dy": dy})
-
-            rows.append(row)
-
-    snap = pd.DataFrame(rows)
-    return snap
-
-
 # =========================================================
-# Ordered Probit Bayesian (Gibbs)
+# Feature builders
 # =========================================================
-def ar1_precision(n: int, rho: float, sigma: float):
-    """
-    Cov: sigma^2 * rho^{|i-j|}
-    Precision(Q) for AR(1) is tridiagonal:
-      Q = (1/sigma^2) * (1/(1-rho^2)) * tridiag([1, 1+rho^2, ..., 1+rho^2, 1], off=-rho)
-    """
-    rho = float(rho)
-    sigma = float(sigma)
-    eps = 1e-9
-    rho = min(max(rho, 0.0 + eps), 1.0 - eps)
-    s2 = max(sigma * sigma, 1e-12)
-
-    a = 1.0 / (1.0 - rho * rho)
-    diag = np.full(n, (1.0 + rho * rho), dtype=np.float64)
-    diag[0] = 1.0
-    diag[-1] = 1.0
-    off = np.full(n - 1, -rho, dtype=np.float64)
-
-    Q = np.zeros((n, n), dtype=np.float64)
-    for i in range(n):
-        Q[i, i] = diag[i]
-    for i in range(n - 1):
-        Q[i, i + 1] = off[i]
-        Q[i + 1, i] = off[i]
-    Q *= (a / s2)
-    return Q
-
-
-def sample_truncnorm(mean, lo, hi, size=1):
-    """
-    N(mean,1) truncated to (lo,hi)
-    via inverse CDF
-    """
-    a = (lo - mean) if np.isfinite(lo) else -np.inf
-    b = (hi - mean) if np.isfinite(hi) else  np.inf
-    Fa = norm.cdf(a) if np.isfinite(a) else 0.0
-    Fb = norm.cdf(b) if np.isfinite(b) else 1.0
-    u = np.random.uniform(Fa, Fb, size=size)
-    z = norm.ppf(u)
-    return mean + z
-
-
-def ordered_probit_gibbs(X: np.ndarray,
-                         y: np.ndarray,
-                         rho: float,
-                         sigma_beta: float,
-                         sigma_gamma: float,
-                         n_iters: int,
-                         burn_frac: float,
-                         thin: int,
-                         event_types: list,
-                         n_static: int,
-                         seed: int = 42):
-    """
-    X: (n, d)
-    y: (n,) in {-1,0,1} (ordered)
-    - static covariates count = n_static (we use [1, strength_diff, progress] => 3)
-    - remaining coefficients are event-count blocks:
-        [home counts (MAX_MINUTE*K), away counts (MAX_MINUTE*K)]
-      and each event type has minute-wise AR(1) prior with same rho, sigma_beta
-      (home/away independent, different event types independent) - 논문 가정과 동일
-
-    Returns:
-      draws_beta: (S, d)
-      draws_delta: (S, 2)
-    """
-    set_all_seeds(seed)
-
-    n, d = X.shape
-    y = y.astype(int)
-
-    # prior precision matrix Q (d x d)
-    # static covariates: iid N(0, sigma_gamma^2)
-    Q = np.zeros((d, d), dtype=np.float64)
-    Q[:n_static, :n_static] = np.eye(n_static, dtype=np.float64) / max(sigma_gamma * sigma_gamma, 1e-12)
-
-    K = len(event_types)
-    per_side = MAX_MINUTE * K
-    start_home = n_static
-    start_away = n_static + per_side
-
-    # event type block: for each k, minutes 1..MAX_MINUTE have AR(1) prior
-    Qm = ar1_precision(MAX_MINUTE, rho=rho, sigma=sigma_beta)  # (90x90)
-
-    # fill home blocks
-    for k in range(K):
-        a = start_home + k * MAX_MINUTE
-        b = a + MAX_MINUTE
-        Q[a:b, a:b] = Qm
-
-    # fill away blocks
-    for k in range(K):
-        a = start_away + k * MAX_MINUTE
-        b = a + MAX_MINUTE
-        Q[a:b, a:b] = Qm
-
-    # init
-    beta = np.zeros(d, dtype=np.float64)
-    delta1, delta2 = -0.5, 0.5
-
-    # latent Π
-    Pi = np.zeros(n, dtype=np.float64)
-
-    burn = int(n_iters * burn_frac)
-    keep_idx = []
-    for it in range(n_iters):
-        # 1) sample Π | beta, delta
-        mu = X @ beta
-
-        # bounds by class
-        for cls in [-1, 0, 1]:
-            idx = np.where(y == cls)[0]
-            if idx.size == 0:
-                continue
-            m = mu[idx]
-            if cls == -1:
-                Pi[idx] = sample_truncnorm(m, lo=-np.inf, hi=delta1, size=idx.size)
-            elif cls == 0:
-                Pi[idx] = sample_truncnorm(m, lo=delta1, hi=delta2, size=idx.size)
-            else:
-                Pi[idx] = sample_truncnorm(m, lo=delta2, hi=np.inf, size=idx.size)
-
-        # 2) sample beta | Π
-        # posterior precision: P = Q + X^T X
-        XtX = (X.T @ X).astype(np.float64)
-        P = Q + XtX
-        bvec = (X.T @ Pi).astype(np.float64)
-
-        # solve mean: P * mean = b
-        # then sample using Cholesky of P
-        # (P should be SPD)
-        try:
-            L = np.linalg.cholesky(P)
-        except np.linalg.LinAlgError:
-            # add jitter
-            jitter = 1e-6 * np.eye(d, dtype=np.float64)
-            L = np.linalg.cholesky(P + jitter)
-
-        # mean = P^{-1} b using chol solve
-        # solve L u = b ; solve L^T mean = u
-        u = np.linalg.solve(L, bvec)
-        mean = np.linalg.solve(L.T, u)
-
-        z = np.random.normal(size=d)
-        # sample: beta = mean + P^{-1/2} z
-        # with chol(P)=L => P^{-1/2} z = solve(L.T, solve(L, z))
-        v = np.linalg.solve(L, z)
-        eps = np.linalg.solve(L.T, v)
-        beta = mean + eps
-
-        # 3) sample deltas | Π  (standard ordered probit Gibbs)
-        # delta1 in (max Pi[y=-1], min Pi[y=0])
-        # delta2 in (max Pi[y=0], min Pi[y=1])
-        mL = np.max(Pi[y == -1]) if np.any(y == -1) else -2.0
-        m0L = np.min(Pi[y == 0]) if np.any(y == 0) else 0.0
-        lo1, hi1 = mL, m0L
-        if not (np.isfinite(lo1) and np.isfinite(hi1) and lo1 < hi1):
-            lo1, hi1 = -1.0, 0.0
-        delta1 = np.random.uniform(lo1, hi1)
-
-        m0U = np.max(Pi[y == 0]) if np.any(y == 0) else 0.0
-        mW = np.min(Pi[y == 1]) if np.any(y == 1) else 2.0
-        lo2, hi2 = m0U, mW
-        if not (np.isfinite(lo2) and np.isfinite(hi2) and lo2 < hi2):
-            lo2, hi2 = 0.0, 1.0
-        delta2 = np.random.uniform(max(lo2, delta1 + 1e-3), hi2)
-
-        if it >= burn and ((it - burn) % thin == 0):
-            keep_idx.append(it)
-
-    # collect draws (we only stored final beta,delta each kept iter)
-    # To keep memory simple, rerun loop? No. We'll store during sampling.
-    # -> modify: store in lists above
-    # For now, minimal change: store progressively
-    # (다시 구현)
-    # ----------------------------------------------------------------
-    # Re-run with proper storing (still deterministic seed)
-    set_all_seeds(seed)
-
-    beta = np.zeros(d, dtype=np.float64)
-    delta1, delta2 = -0.5, 0.5
-    Pi = np.zeros(n, dtype=np.float64)
-
-    draws_beta = []
-    draws_delta = []
-
-    for it in range(n_iters):
-        mu = X @ beta
-        for cls in [-1, 0, 1]:
-            idx = np.where(y == cls)[0]
-            if idx.size == 0:
-                continue
-            m = mu[idx]
-            if cls == -1:
-                Pi[idx] = sample_truncnorm(m, lo=-np.inf, hi=delta1, size=idx.size)
-            elif cls == 0:
-                Pi[idx] = sample_truncnorm(m, lo=delta1, hi=delta2, size=idx.size)
-            else:
-                Pi[idx] = sample_truncnorm(m, lo=delta2, hi=np.inf, size=idx.size)
-
-        XtX = (X.T @ X).astype(np.float64)
-        P = Q + XtX
-        bvec = (X.T @ Pi).astype(np.float64)
-
-        try:
-            L = np.linalg.cholesky(P)
-        except np.linalg.LinAlgError:
-            L = np.linalg.cholesky(P + 1e-6 * np.eye(d, dtype=np.float64))
-
-        u = np.linalg.solve(L, bvec)
-        mean = np.linalg.solve(L.T, u)
-
-        z = np.random.normal(size=d)
-        v = np.linalg.solve(L, z)
-        eps = np.linalg.solve(L.T, v)
-        beta = mean + eps
-
-        mL = np.max(Pi[y == -1]) if np.any(y == -1) else -2.0
-        m0L = np.min(Pi[y == 0]) if np.any(y == 0) else 0.0
-        lo1, hi1 = mL, m0L
-        if not (np.isfinite(lo1) and np.isfinite(hi1) and lo1 < hi1):
-            lo1, hi1 = -1.0, 0.0
-        delta1 = np.random.uniform(lo1, hi1)
-
-        m0U = np.max(Pi[y == 0]) if np.any(y == 0) else 0.0
-        mW = np.min(Pi[y == 1]) if np.any(y == 1) else 2.0
-        lo2, hi2 = m0U, mW
-        if not (np.isfinite(lo2) and np.isfinite(hi2) and lo2 < hi2):
-            lo2, hi2 = 0.0, 1.0
-        delta2 = np.random.uniform(max(lo2, delta1 + 1e-3), hi2)
-
-        if it >= burn and ((it - burn) % thin == 0):
-            draws_beta.append(beta.copy())
-            draws_delta.append([delta1, delta2])
-
-    draws_beta = np.asarray(draws_beta, dtype=np.float64)
-    draws_delta = np.asarray(draws_delta, dtype=np.float64)
-    return draws_beta, draws_delta
-
-
-def ordered_probit_predict_proba(X: np.ndarray, draws_beta: np.ndarray, draws_delta: np.ndarray):
-    """
-    Return probs (n,3) for classes [-1,0,1]
-    """
-    n = X.shape[0]
-    S = draws_beta.shape[0]
-    probs = np.zeros((n, 3), dtype=np.float64)
-
-    for s in range(S):
-        beta = draws_beta[s]
-        d1, d2 = draws_delta[s]
-        mu = X @ beta
-        pL = norm.cdf(d1 - mu)
-        pD = norm.cdf(d2 - mu) - norm.cdf(d1 - mu)
-        pW = 1.0 - norm.cdf(d2 - mu)
-        probs[:, 0] += pL
-        probs[:, 1] += pD
-        probs[:, 2] += pW
-
-    probs /= max(S, 1)
-    probs = np.clip(probs, 1e-12, 1.0)
-    probs = probs / probs.sum(axis=1, keepdims=True)
-    return probs
-
-
-# =========================================================
-# Metrics (Brier, RPS, ECE, LogLoss, AUC one-vs-rest)
-# =========================================================
-def y_to_onehot(y: np.ndarray):
-    # order: [-1,0,1] -> [0,1,2]
-    idx = np.where(y == -1, 0, np.where(y == 0, 1, 2))
-    oh = np.zeros((len(y), 3), dtype=np.float64)
-    oh[np.arange(len(y)), idx] = 1.0
-    return oh, idx
-
-
-def brier_multiclass(y: np.ndarray, p: np.ndarray):
-    oh, _ = y_to_onehot(y)
-    return float(np.mean(np.sum((p - oh) ** 2, axis=1)))
-
-
-def rps_3class(y: np.ndarray, p: np.ndarray):
-    """
-    Ranked Probability Score for ordered 3-class:
-      RPS = (F1 - O1)^2 + (F2 - O2)^2
-    where Fk is cumulative predicted up to class k, O cumulative observed.
-    class order: [-1,0,1]
-    """
-    oh, idx = y_to_onehot(y)
-    # cumulative predicted
-    F1 = p[:, 0]
-    F2 = p[:, 0] + p[:, 1]
-    # cumulative observed
-    O1 = (idx <= 0).astype(np.float64)   # y == -1
-    O2 = (idx <= 1).astype(np.float64)   # y in {-1,0}
-    return float(np.mean((F1 - O1) ** 2 + (F2 - O2) ** 2))
-
-
-def logloss_3class(y: np.ndarray, p: np.ndarray):
-    oh, idx = y_to_onehot(y)
-    pt = p[np.arange(len(y)), idx]
-    return float(-np.mean(np.log(np.clip(pt, 1e-12, 1.0))))
-
-
-def ece_toplabel(y: np.ndarray, p: np.ndarray, n_bins: int = 15):
-    """
-    Top-label ECE:
-      bin by confidence = max prob
-      compare accuracy vs confidence
-    """
-    _, idx = y_to_onehot(y)
-    conf = np.max(p, axis=1)
-    pred = np.argmax(p, axis=1)
-    acc = (pred == idx).astype(np.float64)
-
-    bins = np.linspace(0.0, 1.0, n_bins + 1)
-    ece = 0.0
-    n = len(y)
-    for b in range(n_bins):
-        lo, hi = bins[b], bins[b + 1]
-        m = (conf >= lo) & (conf < hi) if b < n_bins - 1 else (conf >= lo) & (conf <= hi)
-        if not np.any(m):
-            continue
-        w = np.mean(m)
-        ece += w * abs(np.mean(acc[m]) - np.mean(conf[m]))
-    return float(ece)
-
-
-def nbs_from_brier(y: np.ndarray, p: np.ndarray):
-    """
-    Normalized Brier Score (skill): 1 - Brier / Brier_baseline
-    baseline: class frequencies
-    """
-    b = brier_multiclass(y, p)
-    oh, _ = y_to_onehot(y)
-    freq = np.mean(oh, axis=0)  # baseline probs
-    p0 = np.tile(freq, (len(y), 1))
-    b0 = float(np.mean(np.sum((p0 - oh) ** 2, axis=1)))
-    return float(1.0 - b / max(b0, 1e-12))
-
-
-def auc_homewin_onevsrest(y: np.ndarray, p: np.ndarray):
-    """
-    one-vs-rest AUC for "home win (y=1)" probability p[:,2]
-    """
-    y_bin = (y == 1).astype(int)
-    if len(np.unique(y_bin)) < 2:
-        return float("nan")
-    return float(roc_auc_score(y_bin, p[:, 2]))
-
-
-# =========================================================
-# HPO Runner
-# =========================================================
-def sample_from(values):
-    return random.choice(values)
-
-
-def sample_from_range(rng, as_int=False):
-    vals = build_values(rng, as_int=as_int)
-    return random.choice(vals)
-
-
-def make_design_matrix(snap: pd.DataFrame, strength_map: dict):
-    """
-    X = [1, strength_diff, progress] + counts(home+away minutes*types)
-    """
-    n = len(snap)
-    # static: 3
-    n_static = 3
-
-    # counts length = 2 * MAX_MINUTE * K
-    counts_len = len(snap.iloc[0]["feat_counts"])
-    d = n_static + counts_len
-
-    X = np.zeros((n, d), dtype=np.float64)
-
-    # static
-    home = snap["home_team_id"].values.astype(int)
-    away = snap["away_team_id"].values.astype(int)
-
-    sh = np.array([strength_map.get(int(t), 0.0) for t in home], dtype=np.float64)
-    sa = np.array([strength_map.get(int(t), 0.0) for t in away], dtype=np.float64)
-    sdiff = sh - sa
-
-    X[:, 0] = 1.0
-    X[:, 1] = sdiff
-    X[:, 2] = snap["progress"].values.astype(np.float64)
-
-    # counts
-    # feat_counts is ndarray per row
-    # stack
-    C = np.stack(snap["feat_counts"].values, axis=0).astype(np.float64)
-    X[:, n_static:] = C
-
-    # optional raw
-    if USE_INSTANT_RAW:
-        # append at end (but then prior needs 확장. 여기서는 USE_INSTANT_RAW=False 권장)
-        pass
-
-    return X, n_static
-
-
-def run_hpo():
-    ensure_dir(OUT_DIR)
-    ensure_dir(CACHE_DIR)
-    set_all_seeds(SEED)
-
-    df = pd.read_csv(DATA_PATH)
-    teams_by_game = infer_teams_by_game(df)
-    y_by_game = build_outcome_labels_by_game(df, teams_by_game)
-
-    # HPO output file
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    out_csv = os.path.join(OUT_DIR, f"hpo_bayes_outcome_{ts}.csv")
-    best_json = os.path.join(OUT_DIR, f"hpo_bayes_outcome_best_{ts}.json")
-
-    # trial 기록
-    header = [
-        "trial", "window_mode", "window_min", "window_actions", "event_types",
-        "rho", "sigma_beta", "sigma_gamma", "gibbs_iters",
-        "brier", "nbs", "rps", "logloss", "ece", "auc_homewin",
-        "n_samples", "n_features", "time_sec"
+EVENT_COLS = [
+    "H_goal","A_goal",
+    "H_shot_on","A_shot_on",
+    "H_shot_off","A_shot_off",
+    "H_red","A_red",
+    "H_yellow","A_yellow",
+    "H_corner","A_corner",
+    "H_cross","A_cross",
+    "H_foul","A_foul",
+]
+
+DIFF_COLS = [
+    "goal_diff",
+    "shot_on_diff",
+    "shot_off_diff",
+    "red_diff",
+    "yellow_diff",
+    "corner_diff",
+    "cross_diff",
+    "foul_diff",
+]
+
+def add_time_and_sort(df: pd.DataFrame) -> pd.DataFrame:
+    df["match_minute"] = [
+        minute_from_period_time(p, t) for p, t in zip(df["period_id"].values, df["time_seconds"].values)
     ]
-    pd.DataFrame(columns=header).to_csv(out_csv, index=False, encoding="utf-8-sig")
+    df = df.sort_values(["game_id","period_id","time_seconds","team_id"], kind="mergesort").reset_index(drop=True)
+    df["action_idx"] = df.groupby("game_id").cumcount()
+    return df
 
-    # cache key: (window_mode, window_min, window_actions, event_types_key)
-    snap_cache = {}
+def add_cumulative_counts(df: pd.DataFrame) -> pd.DataFrame:
+    # cumulative per action (game-wise)
+    for c in EVENT_COLS:
+        df[c] = df.groupby("game_id")[c].cumsum().astype(np.int16)
 
-    best_score = float("inf")  # brier 기준(낮을수록 좋음)
-    best_pack = None
+    # diff features (H - A)
+    df["goal_diff"]     = (df["H_goal"]     - df["A_goal"]).astype(np.int16)
+    df["shot_on_diff"]  = (df["H_shot_on"]  - df["A_shot_on"]).astype(np.int16)
+    df["shot_off_diff"] = (df["H_shot_off"] - df["A_shot_off"]).astype(np.int16)
+    df["red_diff"]      = (df["H_red"]      - df["A_red"]).astype(np.int16)
+    df["yellow_diff"]   = (df["H_yellow"]   - df["A_yellow"]).astype(np.int16)
+    df["corner_diff"]   = (df["H_corner"]   - df["A_corner"]).astype(np.int16)
+    df["cross_diff"]    = (df["H_cross"]    - df["A_cross"]).astype(np.int16)
+    df["foul_diff"]     = (df["H_foul"]     - df["A_foul"]).astype(np.int16)
 
-    outer = tqdm(range(1, N_ROUNDS + 1), desc="HPO", ncols=110)
-    for trial in outer:
-        t0 = datetime.now().timestamp()
+    return df
 
-        # ---- sample hyperparams
-        window_mode = sample_from(WINDOW_MODE_R)
-        window_min = int(sample_from_range(WINDOW_MIN_R, as_int=True))
-        window_actions = int(sample_from_range(WINDOW_ACT_R, as_int=True))
+def build_minute_panel(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    각 경기(game_id)마다 1~90분의 '그 시점까지 누적 이벤트 카운트'를 가진 패널 생성.
+    - 어떤 분에 action이 없으면 이전 분 누적값을 carry-forward(ffill)
+    """
+    keep_cols = ["game_id","match_minute"] + DIFF_COLS
+    # 각 (game, minute)에서 마지막 action의 누적값
+    last_per_min = df.groupby(["game_id","match_minute"], as_index=False).tail(1)[keep_cols].copy()
 
-        event_types = sample_from(EVENT_TYPES_CANDIDATES)
-        event_types_key = "|".join(event_types)
+    panels = []
+    for gid, gdf in last_per_min.groupby("game_id"):
+        gdf = gdf.set_index("match_minute").sort_index()
+        gdf = gdf.reindex(range(1, MAX_MINUTE+1))
+        gdf["game_id"] = gid
+        gdf[DIFF_COLS] = gdf[DIFF_COLS].ffill().fillna(0)
+        gdf = gdf.reset_index().rename(columns={"index":"match_minute"})
+        panels.append(gdf)
 
-        rho = float(sample_from_range(RHO_R, as_int=False))
-        sigma_beta = float(sample_from_range(SIGMA_BETA_R, as_int=False))
-        sigma_gamma = float(sample_from_range(SIGMA_GAMMA_R, as_int=False))
-        gibbs_iters = int(sample_from_range(GIBBS_ITERS_R, as_int=True))
+    panel = pd.concat(panels, ignore_index=True)
+    return panel
 
-        # ---- load/build snapshots (cache)
-        cache_key = (window_mode, window_min, window_actions, event_types_key)
-        if cache_key in snap_cache:
-            snap = snap_cache[cache_key]
-        else:
-            cache_path = os.path.join(
-                CACHE_DIR,
-                f"snap_{window_mode}_m{window_min}_a{window_actions}_e{len(event_types)}_{abs(hash(event_types_key))%999999}.pkl"
-            )
-            if os.path.exists(cache_path):
-                snap = pd.read_pickle(cache_path)
+def build_match_labels(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    홈팀 관점 결과 y in {-1,0,1}
+    train.csv의 home_score/away_score는 (샘플 확인 결과) 경기 전체에서 상수=최종스코어로 보임.
+    """
+    ms = df.groupby("game_id")[["home_score","away_score"]].first().copy()
+    diff = ms["home_score"] - ms["away_score"]
+    y = np.sign(diff).astype(int)  # -1/0/1
+    ms["y"] = y
+    return ms.reset_index()
+
+# =========================================================
+# Bayesian Ordered Probit (Gibbs)
+# =========================================================
+@dataclass
+class OrderedProbitParams:
+    beta_mean: np.ndarray
+    delta1_mean: float
+    delta2_mean: float
+
+def fit_ordered_probit_gibbs(X: np.ndarray, y: np.ndarray,
+                             n_iter=N_ITER, burn=BURN, thin=THIN,
+                             beta_var=BETA_VAR, delta_var=DELTA_VAR,
+                             seed=SEED) -> OrderedProbitParams:
+    """
+    Standard ordered probit Gibbs:
+    latent z | beta, delta ~ TruncNormal
+    beta | z ~ Normal (conjugate)
+    delta_j | z ~ TruncNormal(prior) with ordering constraints
+
+    sigma^2 fixed to 1.
+    """
+    rng = np.random.default_rng(seed)
+
+    n, p = X.shape
+    # prior precision
+    prior_prec = np.eye(p) / beta_var
+
+    beta = np.zeros(p, dtype=float)
+    delta1, delta2 = -0.5, 0.5
+
+    z = X @ beta
+
+    # store
+    betas = []
+    d1s = []
+    d2s = []
+
+    XtX = X.T @ X
+
+    for it in range(n_iter):
+        mu = X @ beta
+
+        # 1) sample latent z_i
+        z_new = np.empty(n, dtype=float)
+        for i in range(n):
+            if y[i] == -1:
+                low, high = -np.inf, delta1
+            elif y[i] == 0:
+                low, high = delta1, delta2
             else:
-                snap = build_snapshot_table(
-                    df,
-                    teams_by_game=teams_by_game,
-                    y_by_game=y_by_game,
-                    event_types=event_types,
-                    window_mode=window_mode,
-                    window_min=window_min,
-                    window_actions=window_actions,
-                )
-                snap.to_pickle(cache_path)
-            snap_cache[cache_key] = snap
+                low, high = delta2, np.inf
+            z_new[i] = safe_truncnorm_rvs(mu[i], 1.0, low, high)
+        z = z_new
 
-        # ---- CV
-        groups = snap["game_id"].values.astype(int)
-        y = snap["y"].values.astype(int)
+        # 2) sample beta | z  -> Normal
+        post_prec = XtX + prior_prec
+        post_cov = np.linalg.inv(post_prec)
+        post_mean = post_cov @ (X.T @ z)
+        beta = rng.multivariate_normal(mean=post_mean, cov=post_cov)
 
-        gkf = GroupKFold(n_splits=N_FOLDS)
+        # 3) sample deltas with constraints (and N(0, delta_var) prior)
+        sd_delta = np.sqrt(delta_var)
 
-        fold_metrics = []
-        for fold_idx, (tr_idx, va_idx) in enumerate(gkf.split(snap, y, groups=groups)):
-            tr = snap.iloc[tr_idx].reset_index(drop=True)
-            va = snap.iloc[va_idx].reset_index(drop=True)
+        # bounds from z samples
+        z_m1 = z[y == -1]
+        z_0  = z[y == 0]
+        z_p1 = z[y == 1]
 
-            # fold-specific team strength (leakage 방지)
-            y_train_games = {int(g): int(v) for g, v in y_by_game.items() if int(g) in set(tr["game_id"].unique())}
-            strength_map = compute_team_strength_points(y_train_games, teams_by_game)
+        # delta1: max(z|-1) < delta1 < min(z|0) and < delta2
+        low1 = np.max(z_m1) if len(z_m1) else -np.inf
+        up1a = np.min(z_0)  if len(z_0)  else delta2 - 0.1
+        high1 = min(up1a, delta2 - EPS)
 
-            Xtr, n_static = make_design_matrix(tr, strength_map)
-            Xva, _ = make_design_matrix(va, strength_map)
+        delta1 = safe_truncnorm_rvs(0.0, sd_delta, low1, high1)
 
-            ytr = tr["y"].values.astype(int)
-            yva = va["y"].values.astype(int)
+        # delta2: max(z|0) < delta2 < min(z|+1) and > delta1
+        low2a = np.max(z_0) if len(z_0) else delta1 + 0.1
+        low2 = max(low2a, delta1 + EPS)
+        high2 = np.min(z_p1) if len(z_p1) else np.inf
 
-            draws_beta, draws_delta = ordered_probit_gibbs(
-                Xtr, ytr,
-                rho=rho,
-                sigma_beta=sigma_beta,
-                sigma_gamma=sigma_gamma,
-                n_iters=gibbs_iters,
-                burn_frac=BURN_IN_FRAC,
-                thin=THINNING,
-                event_types=event_types,
-                n_static=n_static,
-                seed=SEED + trial * 100 + fold_idx
-            )
+        delta2 = safe_truncnorm_rvs(0.0, sd_delta, low2, high2)
 
-            pva = ordered_probit_predict_proba(Xva, draws_beta, draws_delta)
+        # store after burn/thin
+        if it >= burn and ((it - burn) % thin == 0):
+            betas.append(beta.copy())
+            d1s.append(delta1)
+            d2s.append(delta2)
 
-            m = dict(
-                brier=brier_multiclass(yva, pva),
-                nbs=nbs_from_brier(yva, pva),
-                rps=rps_3class(yva, pva),
-                logloss=logloss_3class(yva, pva),
-                ece=ece_toplabel(yva, pva),
-                auc=auc_homewin_onevsrest(yva, pva)
-            )
-            fold_metrics.append(m)
+    beta_mean = np.mean(np.stack(betas, axis=0), axis=0)
+    return OrderedProbitParams(beta_mean=beta_mean,
+                               delta1_mean=float(np.mean(d1s)),
+                               delta2_mean=float(np.mean(d2s)))
 
-        # ---- aggregate
-        brier = float(np.mean([m["brier"] for m in fold_metrics]))
-        nbs   = float(np.mean([m["nbs"] for m in fold_metrics]))
-        rps   = float(np.mean([m["rps"] for m in fold_metrics]))
-        ll    = float(np.mean([m["logloss"] for m in fold_metrics]))
-        ece   = float(np.mean([m["ece"] for m in fold_metrics]))
-        auc   = float(np.nanmean([m["auc"] for m in fold_metrics]))
-
-        t1 = datetime.now().timestamp()
-        elapsed = float(t1 - t0)
-
-        # ---- record
-        row = {
-            "trial": trial,
-            "window_mode": window_mode,
-            "window_min": window_min,
-            "window_actions": window_actions,
-            "event_types": event_types_key,
-            "rho": rho,
-            "sigma_beta": sigma_beta,
-            "sigma_gamma": sigma_gamma,
-            "gibbs_iters": gibbs_iters,
-            "brier": brier,
-            "nbs": nbs,
-            "rps": rps,
-            "logloss": ll,
-            "ece": ece,
-            "auc_homewin": auc,
-            "n_samples": int(len(snap)),
-            "n_features": int(3 + len(snap.iloc[0]["feat_counts"])),
-            "time_sec": elapsed
-        }
-        pd.DataFrame([row]).to_csv(out_csv, mode="a", header=False, index=False, encoding="utf-8-sig")
-
-        outer.set_postfix_str(
-            f"brier={brier:.6f} rps={rps:.6f} ece={ece:.6f} auc={auc:.4f} ({elapsed:.1f}s)",
-            refresh=True
-        )
-
-        # ---- best (brier 기준)
-        if brier < best_score:
-            best_score = brier
-            best_pack = dict(best_score=best_score, best_row=row)
-            with open(best_json, "w", encoding="utf-8") as f:
-                json.dump(best_pack, f, ensure_ascii=False, indent=2)
-
-    print(f"\n[Done] HPO results: {out_csv}")
-    if best_pack:
-        print(f"[Best] brier={best_pack['best_score']:.6f} saved: {best_json}")
-
-
-# =========================================================
-# Real-time action-step inference helper (서비스용)
-# =========================================================
-def build_realtime_feature_for_action(
-    df_game: pd.DataFrame,
-    action_idx: int,
-    teams_by_game: dict,
-    event_types: list,
-    window_mode: str,
-    window_min: int,
-    window_actions: int,
-    strength_map: dict
-):
+def predict_proba_ordered_probit(X: np.ndarray, params: OrderedProbitParams) -> np.ndarray:
     """
-    df_game: single game actions (preprocessed with preprocess_actions)
-    action_idx: 현재 액션 인덱스(0-based)
-    논문 feature 구조를 유지하되, 입력은 슬라이딩 윈도우로만 구성.
-    반환: X(1,d), n_static
+    Returns proba for classes [-1, 0, 1] in this order: [Loss, Draw, Win] (home perspective).
     """
-    gid = int(df_game.iloc[0][COL_GAME])
-    home, away = teams_by_game[gid]
-    K = len(event_types)
-
-    cur = df_game.iloc[action_idx]
-    tsec = int(cur["_tsec"])
-    t = int(cur["_minute"])  # 1..90
-    prog = float(t) / float(MAX_MINUTE)
-
-    # window로 minute-wise counts 만들기
-    xh = np.zeros((MAX_MINUTE, K), dtype=np.float64)
-    xa = np.zeros((MAX_MINUTE, K), dtype=np.float64)
-
-    if window_mode == "MINUTES":
-        start = max(1, t - window_min + 1)
-        sub = df_game[df_game["_tsec"] <= tsec]
-        # minute별 누적이 아니라, minute별 카운트
-        for r in sub.itertuples(index=False):
-            m = int(getattr(r, "_minute"))
-            if m < start or m > t:
-                continue
-            tn = str(getattr(r, "_type_name"))
-            if tn not in event_types:
-                continue
-            j = event_types.index(tn)
-            tid = int(getattr(r, COL_TEAM))
-            if tid == home:
-                xh[m-1, j] += 1
-            elif tid == away:
-                xa[m-1, j] += 1
-
-    else:  # ACTIONS
-        sub = df_game.iloc[:action_idx+1]
-        sub2 = sub.iloc[max(0, len(sub) - window_actions):]
-        for r in sub2.itertuples(index=False):
-            m = int(getattr(r, "_minute"))
-            if m > t:
-                continue
-            tn = str(getattr(r, "_type_name"))
-            if tn not in event_types:
-                continue
-            j = event_types.index(tn)
-            tid = int(getattr(r, COL_TEAM))
-            if tid == home:
-                xh[m-1, j] += 1
-            elif tid == away:
-                xa[m-1, j] += 1
-
-    feat_counts = np.concatenate([xh.reshape(-1), xa.reshape(-1)], axis=0)
-
-    # static part
-    n_static = 3
-    d = n_static + feat_counts.size
-    X = np.zeros((1, d), dtype=np.float64)
-    X[0, 0] = 1.0
-    X[0, 1] = strength_map.get(home, 0.0) - strength_map.get(away, 0.0)
-    X[0, 2] = prog
-    X[0, n_static:] = feat_counts
-    return X, n_static, t
-
+    mu = X @ params.beta_mean
+    d1, d2 = params.delta1_mean, params.delta2_mean
+    p_loss = norm.cdf(d1 - mu)
+    p_draw = norm.cdf(d2 - mu) - norm.cdf(d1 - mu)
+    p_win  = 1.0 - norm.cdf(d2 - mu)
+    proba = np.vstack([p_loss, p_draw, p_win]).T
+    # numeric safety
+    proba = np.clip(proba, 1e-12, 1.0)
+    proba = proba / proba.sum(axis=1, keepdims=True)
+    return proba
 
 # =========================================================
-# Main
+# Main CV pipeline
 # =========================================================
+def main():
+    ensure_dir(OUT_DIR)
+
+    # 1) load
+    df = pd.read_csv(TRAIN_CSV)
+    with open(MAP_JSON, "r", encoding="utf-8") as f:
+        maps = json.load(f)
+    inv_type = {v: k for k, v in maps["type_result"].items()}
+
+    # 2) decode + time + event flags + cumulative
+    df = decode_type_result(df, inv_type)
+    df = add_time_and_sort(df)
+    df = build_event_flags(df)
+    df = add_cumulative_counts(df)
+
+    # 3) build per-minute panel (one row per match per minute)
+    minute_panel = build_minute_panel(df)
+    labels = build_match_labels(df)  # game_id, y
+
+    panel = minute_panel.merge(labels[["game_id","y"]], on="game_id", how="left")
+
+    # Features for model (diff only + intercept)
+    panel["intercept"] = 1.0
+    FEATS = ["intercept"] + DIFF_COLS
+
+    # GroupKFold by game_id
+    games = labels["game_id"].values
+    gkf = GroupKFold(n_splits=N_FOLDS)
+
+    metrics_rows = []
+
+    for fold, (tr_idx, va_idx) in enumerate(gkf.split(games, groups=games), start=1):
+        fold_dir = os.path.join(OUT_DIR, f"fold_{fold}")
+        ensure_dir(fold_dir)
+
+        tr_games = set(games[tr_idx])
+        va_games = set(games[va_idx])
+
+        # ---- Train 90 minute-models (t=1..90) ----
+        minute_models: Dict[int, OrderedProbitParams] = {}
+
+        for t in tqdm(range(1, MAX_MINUTE+1), desc=f"Fold {fold} | Fit minute models"):
+            tr_t = panel[(panel["match_minute"] == t) & (panel["game_id"].isin(tr_games))].copy()
+            X = tr_t[FEATS].values.astype(float)
+            y = tr_t["y"].values.astype(int)
+
+            params = fit_ordered_probit_gibbs(X, y, seed=SEED + 1000*fold + t)
+            minute_models[t] = params
+
+        # save minute models
+        with open(os.path.join(fold_dir, "minute_models.pkl"), "wb") as f:
+            pickle.dump(minute_models, f)
+
+        # ---- Validation: action-level probabilities ----
+        va_actions = df[df["game_id"].isin(va_games)].copy()
+        va_actions = va_actions.reset_index(drop=True)  # ✅ 이 줄 추가
+        va_actions["intercept"] = 1.0
+
+        # action feature matrix uses current cumulative diffs (already computed per action)
+        X_action = va_actions[["intercept"] + DIFF_COLS].values.astype(float)
+
+        # per-action predict: pick params by its minute
+        proba_list = []
+        for t, idxs in va_actions.groupby("match_minute").groups.items():
+            params = minute_models.get(int(t), None)
+            if params is None:
+                # should not happen, but safe
+                params = minute_models[MAX_MINUTE]
+            X_part = X_action[np.array(list(idxs))]
+            proba_part = predict_proba_ordered_probit(X_part, params)
+            proba_list.append((idxs, proba_part))
+
+        # stitch back
+        proba = np.zeros((len(va_actions), 3), dtype=float)
+        for idxs, pp in proba_list:
+            proba[np.array(list(idxs)), :] = pp
+
+        # y_true per action = match y
+        y_map = labels.set_index("game_id")["y"].to_dict()
+        y_true = va_actions["game_id"].map(y_map).values.astype(int)
+
+        # logloss (classes order [-1,0,1] -> columns [loss,draw,win])
+        # sklearn expects labels [0..C-1], so remap
+        class_order = [-1, 0, 1]
+        y_remap = np.array([class_order.index(v) for v in y_true], dtype=int)
+        ll = log_loss(y_remap, proba, labels=[0,1,2])
+
+        brier = multiclass_brier(y_true, proba, classes=class_order)
+
+        metrics_rows.append({
+            "fold": fold,
+            "val_games": len(va_games),
+            "val_actions": len(va_actions),
+            "logloss_action": ll,
+            "brier_action": brier
+        })
+
+        # save per-action probs
+        out = va_actions[[
+            "game_id","period_id","time_seconds","match_minute",
+            "home_team_id","away_team_id","home_team_name","away_team_name",
+            "team_id","type_result","type_name","result_name"
+        ]].copy()
+        out["p_home_loss"] = proba[:, 0]
+        out["p_draw"]      = proba[:, 1]
+        out["p_home_win"]  = proba[:, 2]
+        out["p_away_win"]  = out["p_home_loss"]  # away win = home loss
+
+        out.to_csv(os.path.join(fold_dir, "val_action_probs.csv"), index=False)
+
+        print(f"[Fold {fold}] action-logloss={ll:.6f} | action-brier={brier:.6f}")
+
+    metrics_df = pd.DataFrame(metrics_rows)
+    metrics_df.to_csv(os.path.join(OUT_DIR, "cv_metrics.csv"), index=False)
+    print("\nSaved:", os.path.join(OUT_DIR, "cv_metrics.csv"))
+
+
 if __name__ == "__main__":
-    run_hpo()
+    main()
