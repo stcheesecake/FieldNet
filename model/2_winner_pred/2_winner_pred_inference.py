@@ -3,7 +3,6 @@
 
 import os
 import json
-import pickle
 import warnings
 from dataclasses import dataclass
 from typing import Dict, List, Tuple
@@ -28,9 +27,9 @@ OUT_DIR = "../../../FiledNet_pkl_temp/results/results_bayes_winprob"
 N_FOLDS = 5
 SEED = 42
 
-# ---- Minute indexing for option B ----
-# half(전/후) 내 분을 그대로 쓰되, 너무 길어질 때 상한(안전장치)
-CAP_MINUTES_PER_HALF = 70   # 보통 50대면 충분, 넉넉히 70
+# ✅ Option B: 전/후반 "하프 내 분(minute_in_half)" 그대로 사용
+# 안전장치(너무 긴 outlier 방지). 필요하면 90까지 올려도 됨.
+CAP_MINUTES_PER_HALF = 70
 
 # Gibbs sampler
 N_ITER = 2500
@@ -41,6 +40,13 @@ THIN   = 5
 BETA_VAR  = 50.0
 DELTA_VAR = 200.0**2
 EPS = 1e-6
+
+# backoff settings
+MIN_TRAIN_SAMPLES = 15     # 이 분의 학습샘플 수가 너무 적으면 이전 분 모델 복사
+LATE_MIN_START = 50        # "막판" 백오프 로그 집계 기준
+
+# save options
+SAVE_DRAW_PROB = True     # True면 draw_pred도 CSV에 추가 저장
 
 # =========================================================
 # Utils
@@ -173,10 +179,7 @@ DIFF_COLS = [
 ]
 
 def add_time_and_sort(df: pd.DataFrame) -> pd.DataFrame:
-    # ✅ Option B time key: minute_in_half (period 내 분)
     df["minute_in_half"] = [minute_in_half_from_time(t) for t in df["time_seconds"].values]
-
-    # 액션 정렬 (원래대로)
     df = df.sort_values(["game_id","period_id","time_seconds","team_id"], kind="mergesort").reset_index(drop=True)
     df["action_idx"] = df.groupby("game_id").cumcount()
     return df
@@ -196,46 +199,46 @@ def add_cumulative_counts(df: pd.DataFrame) -> pd.DataFrame:
 
     return df
 
-def compute_max_minutes_per_half(df: pd.DataFrame, cap: int) -> Dict[int, int]:
+def build_game_period_max(df: pd.DataFrame, cap: int) -> pd.DataFrame:
     """
-    데이터에서 period별 minute_in_half 최대를 구하되, cap으로 상한.
+    ✅ 핵심: (game_id, period_id)별 '실제 존재하는' 최대 minute_in_half
+    cap으로 상한 적용.
     """
-    max_by_period = df.groupby("period_id")["minute_in_half"].max().to_dict()
-    out = {}
-    for pid in [1, 2]:
-        m = int(max_by_period.get(pid, 45))
-        out[pid] = min(max(1, m), cap)
-    return out
+    gp = df.groupby(["game_id","period_id"])["minute_in_half"].max().reset_index()
+    gp["max_minute_in_half"] = gp["minute_in_half"].astype(int).clip(upper=cap)
+    gp = gp.drop(columns=["minute_in_half"])
+    return gp
 
-def build_minute_panel(df: pd.DataFrame, max_min_per_half: Dict[int, int]) -> pd.DataFrame:
+def build_minute_panel(df: pd.DataFrame, gp_max: pd.DataFrame) -> pd.DataFrame:
     """
-    ✅ Option B panel:
-    (game_id, period_id, minute_in_half)별 누적 diff의 마지막 action값을 사용.
-    해당 minute에 action이 없으면 이전 minute 누적값을 ffill.
+    ✅ '경기 끝난 뒤 분'은 아예 만들지 않음.
+    각 (game, period)은 1..max_minute_in_half까지만 reindex + ffill.
     """
     keep_cols = ["game_id","period_id","minute_in_half"] + DIFF_COLS
 
-    # 각 (game, period, minute)에서 마지막 action의 누적값
     last_per_min = (
         df.groupby(["game_id","period_id","minute_in_half"], as_index=False)
           .tail(1)[keep_cols]
           .copy()
     )
 
+    # max join
+    last_per_min = last_per_min.merge(gp_max, on=["game_id","period_id"], how="left")
+
     panels = []
     for (gid, pid), gdf in last_per_min.groupby(["game_id","period_id"]):
-        max_m = max_min_per_half.get(int(pid), 45)
+        max_m = int(gdf["max_minute_in_half"].iloc[0])
+        gdf = gdf.drop(columns=["max_minute_in_half"])
 
         gdf = gdf.set_index("minute_in_half").sort_index()
-        gdf = gdf.reindex(range(1, max_m + 1))
+        gdf = gdf.reindex(range(1, max_m + 1))  # ✅ 경기 실제 마지막 분까지만
         gdf["game_id"] = gid
         gdf["period_id"] = int(pid)
         gdf[DIFF_COLS] = gdf[DIFF_COLS].ffill().fillna(0)
         gdf = gdf.reset_index().rename(columns={"index": "minute_in_half"})
         panels.append(gdf)
 
-    panel = pd.concat(panels, ignore_index=True)
-    return panel
+    return pd.concat(panels, ignore_index=True)
 
 def build_match_labels(df: pd.DataFrame) -> pd.DataFrame:
     ms = df.groupby("game_id")[["home_score","away_score"]].first().copy()
@@ -276,7 +279,6 @@ def fit_ordered_probit_gibbs(
     for it in range(n_iter):
         mu = X @ beta
 
-        # latent z
         z = np.empty(n, dtype=float)
         for i in range(n):
             if y[i] == -1:
@@ -287,13 +289,11 @@ def fit_ordered_probit_gibbs(
                 low, high = delta2, np.inf
             z[i] = safe_truncnorm_rvs(mu[i], 1.0, low, high)
 
-        # beta | z
         post_prec = XtX + prior_prec
         post_cov = np.linalg.inv(post_prec)
         post_mean = post_cov @ (X.T @ z)
         beta = rng.multivariate_normal(mean=post_mean, cov=post_cov)
 
-        # deltas
         sd_delta = np.sqrt(delta_var)
         z_m1 = z[y == -1]
         z_0  = z[y == 0]
@@ -339,7 +339,7 @@ def predict_proba_ordered_probit(X: np.ndarray, params: OrderedProbitParams) -> 
 
 
 # =========================================================
-# Main: 5-fold GroupKFold OOF (Option B: period+minute_in_half)
+# Main: 5-fold GroupKFold OOF (Option B improved)
 # =========================================================
 def main():
     ensure_dir(OUT_DIR)
@@ -352,15 +352,16 @@ def main():
 
     # preprocess
     df = decode_type_result(df, inv_type)
-    df = add_time_and_sort(df)      # adds minute_in_half
+    df = add_time_and_sort(df)
     df = build_event_flags(df)
     df = add_cumulative_counts(df)
 
-    # max minutes per half from data (capped)
-    max_min_per_half = compute_max_minutes_per_half(df, CAP_MINUTES_PER_HALF)
-    print("[Max minutes per half (capped)]", max_min_per_half)
+    # ✅ 경기/하프별 실제 마지막 분 (cap 적용)
+    gp_max = build_game_period_max(df, CAP_MINUTES_PER_HALF)
 
-    minute_panel = build_minute_panel(df, max_min_per_half)  # (game, period, minute_in_half)
+    # ✅ minute panel: 경기 끝난 뒤 분은 아예 생성 안 함
+    minute_panel = build_minute_panel(df, gp_max)
+
     labels = build_match_labels(df)
     meta = build_match_meta(df)
 
@@ -375,7 +376,6 @@ def main():
     metrics_rows = []
     oof_rows = []
 
-    # ✅ overall을 정확히 계산하기 위해 fold별 y/proba를 모아둠
     all_y_true = []
     all_proba = []
 
@@ -385,53 +385,80 @@ def main():
 
         print(f"\n[Fold {fold}] train_games={len(tr_games)} | val_games={len(va_games)}")
 
-        # ---- Train models for each (period_id, minute_in_half) ----
+        # ✅ fold별 학습 범위(훈련 경기에서 실제 존재하는 최대 minute_in_half)
+        df_tr = df[df["game_id"].isin(tr_games)]
+        max_train_by_period = df_tr.groupby("period_id")["minute_in_half"].max().to_dict()
+        max_train_by_period = {
+            1: int(min(max_train_by_period.get(1, 45), CAP_MINUTES_PER_HALF)),
+            2: int(min(max_train_by_period.get(2, 45), CAP_MINUTES_PER_HALF)),
+        }
+        print(f"[Fold {fold}] max_train_minutes_per_half={max_train_by_period}")
+
         models: Dict[Tuple[int, int], OrderedProbitParams] = {}
 
+        backoff_minutes = {1: [], 2: []}
+        backoff_late = {1: [], 2: []}
+
         for pid in [1, 2]:
-            max_m = max_min_per_half.get(pid, 45)
+            max_m = max_train_by_period.get(pid, 45)
+
             for m in tqdm(range(1, max_m + 1), desc=f"Fold {fold} | Fit models (period={pid})"):
                 tr_t = panel[
+                    (panel["game_id"].isin(tr_games)) &
                     (panel["period_id"] == pid) &
-                    (panel["minute_in_half"] == m) &
-                    (panel["game_id"].isin(tr_games))
+                    (panel["minute_in_half"] == m)
                 ]
+                # 샘플 부족이면 이전 분 모델 복사(backoff)
+                if len(tr_t) < MIN_TRAIN_SAMPLES and (pid, m - 1) in models:
+                    models[(pid, m)] = models[(pid, m - 1)]
+                    backoff_minutes[pid].append(m)
+                    if m >= LATE_MIN_START:
+                        backoff_late[pid].append(m)
+                    continue
+
                 X = tr_t[FEATS].values.astype(float)
                 y = tr_t["y"].values.astype(int)
 
-                # 안전: 혹시 특정 분에 샘플이 너무 적으면 (극단 상황) 스킵/백오프
-                if len(tr_t) < 10:
-                    # 이전 분 모델이 있으면 그걸 그대로 사용(학습 안정 목적)
-                    if (pid, m - 1) in models:
-                        models[(pid, m)] = models[(pid, m - 1)]
-                        continue
+                models[(pid, m)] = fit_ordered_probit_gibbs(
+                    X, y,
+                    seed=SEED + 1000*fold + pid*100 + m
+                )
 
-                models[(pid, m)] = fit_ordered_probit_gibbs(X, y, seed=SEED + 1000*fold + pid*100 + m)
+        # backoff logs
+        for pid in [1, 2]:
+            bo = backoff_minutes[pid]
+            bo_late = backoff_late[pid]
+            print(f"[Fold {fold}] period={pid} backoff={len(bo)} minutes"
+                  f" | late_backoff(>= {LATE_MIN_START})={len(bo_late)}"
+                  f"{' | mins=' + str(bo_late[:20]) + ('...' if len(bo_late)>20 else '') if len(bo_late)>0 else ''}")
 
-        # ---- Validation prediction on minute_panel ----
+        # ---- Validation prediction on minute_panel (이미 '실제 마지막 분까지만' 포함) ----
         va_panel = minute_panel[minute_panel["game_id"].isin(va_games)].copy().reset_index(drop=True)
         va_panel["intercept"] = 1.0
         X_min = va_panel[["intercept"] + DIFF_COLS].values.astype(float)
 
         proba = np.zeros((len(va_panel), 3), dtype=float)
 
-        # group by (period, minute_in_half)
         for (pid, m), sub in va_panel.groupby(["period_id","minute_in_half"], sort=False):
+            pid = int(pid)
+            m = int(m)
             idxs = sub.index.to_numpy()
-            pid = int(pid); m = int(m)
-            max_m = max_min_per_half.get(pid, 45)
-            key = (pid, m) if (pid, m) in models else (pid, max_m)  # cap 넘어가면 마지막 모델
-            params = models[key]
+
+            max_m = max_train_by_period.get(pid, 45)
+            use_m = m if m <= max_m else max_m  # 훈련에 없는 분이면 마지막 분 모델로
+
+            # 혹시 어떤 이유로 models가 비어있을 때 대비
+            if (pid, use_m) not in models:
+                # 최소한 (pid,1)이 있길 기대, 없으면 그냥 스킵 방지용
+                use_m = 1
+            params = models[(pid, use_m)]
             proba[idxs, :] = predict_proba_ordered_probit(X_min[idxs], params)
 
-        # y_true = match label repeated over rows
         y_map = labels.set_index("game_id")["y"].to_dict()
         y_true = va_panel["game_id"].map(y_map).values.astype(int)
 
-        # ---- Metrics (fold) ----
         brier = multiclass_brier(y_true, proba, classes)
         nbs = nbs_from_brier(y_true, proba, classes)
-
         y_remap = np.array([classes.index(v) for v in y_true], dtype=int)
         auc = roc_auc_score(y_remap, proba, multi_class="ovr", average="macro")
 
@@ -441,30 +468,38 @@ def main():
             "val_rows_minutes": len(va_panel),
             "brier": brier,
             "nbs": nbs,
-            "auc_ovr_macro": auc
+            "auc_ovr_macro": auc,
+            "backoff_p1": len(backoff_minutes[1]),
+            "backoff_p2": len(backoff_minutes[2]),
+            "late_backoff_p1": len(backoff_late[1]),
+            "late_backoff_p2": len(backoff_late[2]),
         })
 
         print(f"[Fold {fold}] Brier={brier:.6f} | NBS={nbs:.6f} | AUC(ovr,macro)={auc:.6f}")
 
-        # overall pool
         all_y_true.append(y_true)
         all_proba.append(proba)
 
-        # ---- OOF output rows (requested columns) ----
+        # ---- OOF output (요청 컬럼 그대로) ----
         out = va_panel[["game_id","period_id","minute_in_half"]].copy()
         out = out.merge(meta, on="game_id", how="left")
 
-        # time = period 내 대표 초 (minute 시작 기준)
         out["time"] = (out["minute_in_half"].astype(int) - 1) * 60.0
 
         out["home_pred"] = proba[:, 2]  # P(home win)
-        out["away_pred"] = proba[:, 0]  # P(away win)
+        out["away_pred"] = proba[:, 0]  # P(away win) = P(home loss)
+        if SAVE_DRAW_PROB:
+            out["draw_pred"] = proba[:, 1]
 
-        out = out[[
+        keep_cols = [
             "game_id","period_id","time",
             "home_pred","away_pred",
             "home_team_name","away_team_name"
-        ]]
+        ]
+        if SAVE_DRAW_PROB:
+            keep_cols.insert(5, "draw_pred")  # home_pred, away_pred 사이/옆이든 취향대로
+
+        out = out[keep_cols]
         oof_rows.append(out)
 
     # ---- Save outputs ----
