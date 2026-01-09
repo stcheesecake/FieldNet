@@ -1,0 +1,36 @@
+{
+  "best_trial": 2,
+  "best_brier": 0.012901457321862764,
+  "best_nbs": -1.5828804566262336,
+  "best_params": {
+    "n_prev": 4,
+    "eta": 0.08,
+    "max_depth": 10,
+    "subsample": 0.3,
+    "colsample_bytree": 0.25,
+    "reg_lambda": 1.1,
+    "min_child_weight": 60,
+    "num_boost_round": 100,
+    "early_stop": 100,
+    "gamma": 0.63,
+    "reg_alpha": 0.59,
+    "scale_pos_weight": 21,
+    "max_bin": 64
+  },
+  "best_metrics": {
+    "brier": 0.012901457321862764,
+    "nbs": -1.5828804566262336,
+    "auc": 0.8455730531398071,
+    "logloss": 0.06739860692497157,
+    "ece": 0.04722629122565431,
+    "pos_rate": 0.005020190481107863,
+    "n_samples": 929646,
+    "n_features": 256
+  },
+  "config": {
+    "N_FUTURE_ACTIONS": 10,
+    "N_FOLDS": 2,
+    "SEED": 42,
+    "N_ROUNDS": 3
+  }
+}

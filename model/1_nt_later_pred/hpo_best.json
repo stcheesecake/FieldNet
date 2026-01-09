@@ -1,0 +1,34 @@
+{
+  "best_trial": 420,
+  "best_brier": 0.004316653776714281,
+  "best_nbs": 0.13580300273493895,
+  "best_params": {
+    "n_prev": 3,
+    "iterations": 1200,
+    "od_wait": 75,
+    "learning_rate": 0.11,
+    "depth": 5,
+    "l2_leaf_reg": 0.18,
+    "random_strength": 0.1,
+    "subsample": 0.95,
+    "min_data_in_leaf": 50,
+    "border_count": 192
+  },
+  "best_metrics": {
+    "brier": 0.004316653776714281,
+    "nbs": 0.13580300273493895,
+    "auc": 0.8601990615024226,
+    "logloss": 0.02400454017990618,
+    "ece": 7.244281359966286e-05,
+    "pos_rate": 0.005020190481107863,
+    "n_samples": 929646,
+    "n_features": 48,
+    "n_cat_features": 6
+  },
+  "config": {
+    "N_FUTURE_ACTIONS": 10,
+    "N_FOLDS": 5,
+    "SEED": 42,
+    "N_ROUNDS": 500
+  }
+}

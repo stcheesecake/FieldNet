@@ -1,0 +1,2 @@
+﻿trial,n_prev,eta,max_depth,subsample,colsample_bytree,reg_lambda,min_child_weight,num_boost_round,early_stop,gamma,reg_alpha,scale_pos_weight,max_bin,brier,nbs,auc,logloss,ece,pos_rate,n_samples,n_features
+1,4,0.1,7,1.0,0.7,1.0,60,1000,90,0.3,0.2,1,256,0.007543846193733315,-0.5102830955824669,0.7961846537608768,0.03746433901948583,0.010380986205689982,0.005020190481107863,929646,256

@@ -1,0 +1,64 @@
+﻿type_result_str,type_result,n_rows,n_goal_by_rule,n_goal_by_true,rule_minus_true
+Pass__Successful,40,154195,0,185,-185
+Ball Received__NA,2,1743,0,1,-1
+Goal__NA,24,515,515,0,515
+Shot__Goal,52,462,462,0,462
+Penalty Kick__Goal,43,43,43,0,43
+Shot_Freekick__Goal,48,10,10,0,10
+Pass Received__NA,35,167531,0,0,0
+Carry__NA,4,88739,0,0,0
+Recovery__NA,46,29713,0,0,0
+Pass__Unsuccessful,41,24387,0,0,0
+Interception__NA,29,13852,0,0,0
+Out__NA,32,12136,0,0,0
+Duel__Successful,12,11239,0,0,0
+Clearance__NA,6,9847,0,0,0
+Intervention__NA,30,8835,0,0,0
+Block__NA,3,6881,0,0,0
+Tackle__Unsuccessful,58,6517,0,0,0
+Throw-In__Successful,61,6347,0,0,0
+Cross__Unsuccessful,8,4952,0,0,0
+Foul__NA,17,3432,0,0,0
+Pass_Freekick__Successful,38,3298,0,0,0
+Tackle__Successful,57,2981,0,0,0
+Error__NA,14,2587,0,0,0
+Goal Kick__Successful,20,2066,0,0,0
+Shot__Off Target,55,1893,0,0,0
+Cross__Successful,7,1211,0,0,0
+Throw-In__Unsuccessful,62,1114,0,0,0
+Catch__NA,5,1109,0,0,0
+Shot__On Target,56,1074,0,0,0
+Pass_Freekick__Unsuccessful,39,1064,0,0,0
+Take-On__Unsuccessful,60,1015,0,0,0
+Goal Kick__Unsuccessful,21,964,0,0,0
+Pass_Corner__Unsuccessful,37,964,0,0,0
+Shot__Blocked,51,829,0,0,0
+Parry__NA,34,807,0,0,0
+Pass_Corner__Successful,36,765,0,0,0
+Foul__Yellow_Card,19,633,0,0,0
+Hit__NA,28,581,0,0,0
+Aerial Clearance__Successful,0,540,0,0,0
+Offside__NA,31,529,0,0,0
+Take-On__Successful,59,441,0,0,0
+Pause__NA,42,410,0,0,0
+Defensive Line Support__Successful,9,289,0,0,0
+Handball_Foul__NA,26,144,0,0,0
+Shot__Low Quality Shot,54,105,0,0,0
+Goal Miss__NA,22,83,0,0,0
+Shot_Freekick__Off Target,49,74,0,0,0
+Goal Post__NA,23,71,0,0,0
+Aerial Clearance__Unsuccessful,1,60,0,0,0
+Shot_Freekick__On Target,50,38,0,0,0
+Deflection__NA,11,34,0,0,0
+Defensive Line Support__Unsuccessful,10,31,0,0,0
+Shot_Freekick__Blocked,47,30,0,0,0
+Foul__Direct_Red_Card,16,21,0,0,0
+Own Goal__NA,33,18,0,0,0
+Shot__Keeper Rush-Out,53,18,0,0,0
+Foul__Second_Yellow_Card,18,11,0,0,0
+Foul_Throw__NA,15,7,0,0,0
+Handball_Foul__Yellow_Card,27,7,0,0,0
+Duel__Unsuccessful,13,5,0,0,0
+Penalty Kick__On Target,45,5,0,0,0
+Penalty Kick__Off Target,44,3,0,0,0
+Handball_Foul__Direct_Red_Card,25,1,0,0,0
